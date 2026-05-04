@@ -6,6 +6,10 @@ enum SettingsOpener {
         openSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
     }
 
+    static func openInputMonitoringSettings() {
+        openSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+    }
+
     static func openMicrophoneSettings() {
         openSettingsPane("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")
     }
