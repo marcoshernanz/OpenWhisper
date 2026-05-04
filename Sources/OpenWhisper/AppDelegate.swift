@@ -14,6 +14,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
 
     private var fnMonitor: FnKeyMonitor?
+    private var setupWindowController: PermissionSetupWindowController?
     private var isRecording = false
     private var isTranscribing = false
     private var accessibilityPromptShown = false
@@ -22,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureStatusItem()
         requestMicrophoneAccess()
         startFnMonitor()
+        showSetupWindowIfNeeded()
     }
 
     private func configureStatusItem() {
@@ -30,6 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menu = NSMenu()
         menu.addItem(NSMenuItem(title: "OpenWhisper", action: nil, keyEquivalent: ""))
         menu.addItem(NSMenuItem.separator())
+        menu.addItem(NSMenuItem(
+            title: "Setup Permissions...",
+            action: #selector(showSetupWindow),
+            keyEquivalent: ""
+        ))
         menu.addItem(NSMenuItem(
             title: "Open Setup Instructions",
             action: #selector(openSetupInstructions),
@@ -63,10 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             fnMonitor = monitor
         } catch {
             setStatus(.needsAccessibility)
-            showOneTimeAlert(
-                title: "Accessibility Permission Required",
-                message: "OpenWhisper needs Accessibility permission to detect the fn key and insert dictated text."
-            )
+            showSetupWindow()
         }
     }
 
@@ -79,6 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Task { @MainActor in
                     if !granted {
                         self?.setStatus(.needsMicrophone)
+                        self?.showSetupWindow()
+                    } else {
+                        self?.updateSetupWindow()
                     }
                 }
             }
@@ -98,10 +105,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             setStatus(.recording)
         } catch {
             setStatus(.error)
-            showOneTimeAlert(
-                title: "Could Not Start Recording",
-                message: error.localizedDescription
-            )
+            if permissionsNeedSetup {
+                showSetupWindow()
+            } else {
+                showOneTimeAlert(
+                    title: "Could Not Start Recording",
+                    message: error.localizedDescription
+                )
+            }
         }
     }
 
@@ -160,6 +171,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             "AXTrustedCheckOptionPrompt": true
         ] as CFDictionary
         _ = AXIsProcessTrustedWithOptions(options)
+    }
+
+    private var permissionsNeedSetup: Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) != .authorized || !AXIsProcessTrusted()
+    }
+
+    private func showSetupWindowIfNeeded() {
+        guard permissionsNeedSetup else { return }
+        showSetupWindow()
+    }
+
+    @objc private func showSetupWindow() {
+        if setupWindowController == nil {
+            setupWindowController = PermissionSetupWindowController(
+                requestMicrophonePermission: { [weak self] in
+                    self?.requestMicrophoneAccess()
+                },
+                openAccessibilitySettings: {
+                    SettingsOpener.openAccessibilitySettings()
+                },
+                openMicrophoneSettings: {
+                    SettingsOpener.openMicrophoneSettings()
+                },
+                readState: {
+                    PermissionSetupState(
+                        microphoneStatus: AVCaptureDevice.authorizationStatus(for: .audio),
+                        accessibilityTrusted: AXIsProcessTrusted()
+                    )
+                }
+            )
+        }
+
+        updateSetupWindow()
+        setupWindowController?.showWindow(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func updateSetupWindow() {
+        setupWindowController?.update(
+            state: PermissionSetupState(
+                microphoneStatus: AVCaptureDevice.authorizationStatus(for: .audio),
+                accessibilityTrusted: AXIsProcessTrusted()
+            )
+        )
     }
 
     private func setStatus(_ status: AppStatus) {
