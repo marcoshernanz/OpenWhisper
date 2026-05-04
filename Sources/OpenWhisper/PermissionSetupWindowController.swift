@@ -3,6 +3,7 @@ import AVFoundation
 
 struct PermissionSetupState {
     let microphoneStatus: AVAuthorizationStatus
+    let keyboardMonitoringTrusted: Bool
     let accessibilityTrusted: Bool
 }
 
@@ -10,27 +11,38 @@ struct PermissionSetupState {
 final class PermissionSetupWindowController: NSWindowController {
     private let requestMicrophonePermission: () -> Void
     private let openAccessibilitySettings: () -> Void
+    private let requestKeyboardMonitoringPermission: () -> Void
+    private let openKeyboardMonitoringSettings: () -> Void
     private let openMicrophoneSettings: () -> Void
+    private let relaunchApp: () -> Void
     private let readState: () -> PermissionSetupState
 
     private let microphoneStatusLabel = NSTextField(labelWithString: "")
+    private let keyboardMonitoringStatusLabel = NSTextField(labelWithString: "")
     private let accessibilityStatusLabel = NSTextField(labelWithString: "")
     private let microphoneButton = NSButton()
+    private let keyboardMonitoringButton = NSButton()
     private let accessibilityButton = NSButton()
 
     init(
         requestMicrophonePermission: @escaping () -> Void,
         openAccessibilitySettings: @escaping () -> Void,
+        requestKeyboardMonitoringPermission: @escaping () -> Void,
+        openKeyboardMonitoringSettings: @escaping () -> Void,
         openMicrophoneSettings: @escaping () -> Void,
+        relaunchApp: @escaping () -> Void,
         readState: @escaping () -> PermissionSetupState
     ) {
         self.requestMicrophonePermission = requestMicrophonePermission
         self.openAccessibilitySettings = openAccessibilitySettings
+        self.requestKeyboardMonitoringPermission = requestKeyboardMonitoringPermission
+        self.openKeyboardMonitoringSettings = openKeyboardMonitoringSettings
         self.openMicrophoneSettings = openMicrophoneSettings
+        self.relaunchApp = relaunchApp
         self.readState = readState
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 520, height: 290),
+            contentRect: NSRect(x: 0, y: 0, width: 600, height: 390),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -68,8 +80,12 @@ final class PermissionSetupWindowController: NSWindowController {
             microphoneButton.isEnabled = true
         }
 
+        keyboardMonitoringStatusLabel.stringValue = state.keyboardMonitoringTrusted ? "Allowed" : "Needs approval"
+        keyboardMonitoringButton.title = state.keyboardMonitoringTrusted ? "Allowed" : "Allow Keyboard Monitoring"
+        keyboardMonitoringButton.isEnabled = !state.keyboardMonitoringTrusted
+
         accessibilityStatusLabel.stringValue = state.accessibilityTrusted ? "Allowed" : "Needs approval"
-        accessibilityButton.title = state.accessibilityTrusted ? "Allowed" : "Open Accessibility Settings"
+        accessibilityButton.title = state.accessibilityTrusted ? "Allowed" : "Allow Paste Control"
         accessibilityButton.isEnabled = !state.accessibilityTrusted
     }
 
@@ -81,16 +97,21 @@ final class PermissionSetupWindowController: NSWindowController {
         titleLabel.font = .boldSystemFont(ofSize: 22)
         titleLabel.alignment = .center
 
-        let bodyLabel = NSTextField(wrappingLabelWithString: "OpenWhisper runs as a menu bar app. It needs Microphone permission to record while you hold fn, and Accessibility permission to detect fn and paste the final transcript.")
+        let bodyLabel = NSTextField(wrappingLabelWithString: "OpenWhisper runs as a menu bar app. It needs Microphone permission to record, Keyboard Monitoring permission to detect fn, and Accessibility permission to paste the final transcript.")
         bodyLabel.alignment = .center
         bodyLabel.textColor = .secondaryLabelColor
 
         microphoneStatusLabel.alignment = .right
+        keyboardMonitoringStatusLabel.alignment = .right
         accessibilityStatusLabel.alignment = .right
 
         microphoneButton.target = self
         microphoneButton.action = #selector(handleMicrophoneButton)
         microphoneButton.bezelStyle = .rounded
+
+        keyboardMonitoringButton.target = self
+        keyboardMonitoringButton.action = #selector(handleKeyboardMonitoringButton)
+        keyboardMonitoringButton.bezelStyle = .rounded
 
         accessibilityButton.target = self
         accessibilityButton.action = #selector(handleAccessibilityButton)
@@ -98,6 +119,9 @@ final class PermissionSetupWindowController: NSWindowController {
 
         let refreshButton = NSButton(title: "Refresh", target: self, action: #selector(refreshStatus))
         refreshButton.bezelStyle = .rounded
+
+        let relaunchButton = NSButton(title: "Relaunch", target: self, action: #selector(relaunch))
+        relaunchButton.bezelStyle = .rounded
 
         let doneButton = NSButton(title: "Done", target: self, action: #selector(closeWindow))
         doneButton.bezelStyle = .rounded
@@ -112,11 +136,20 @@ final class PermissionSetupWindowController: NSWindowController {
                 actionButton: microphoneButton
             ),
             makePermissionRow(
+                title: "Keyboard Monitoring",
+                statusLabel: keyboardMonitoringStatusLabel,
+                actionButton: keyboardMonitoringButton
+            ),
+            makePermissionRow(
                 title: "Accessibility",
                 statusLabel: accessibilityStatusLabel,
                 actionButton: accessibilityButton
             ),
-            makeButtonRow(refreshButton: refreshButton, doneButton: doneButton)
+            makeButtonRow(
+                refreshButton: refreshButton,
+                relaunchButton: relaunchButton,
+                doneButton: doneButton
+            )
         ])
         stack.orientation = .vertical
         stack.alignment = .leading
@@ -125,8 +158,8 @@ final class PermissionSetupWindowController: NSWindowController {
 
         rootView.addSubview(stack)
         NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: 28),
-            stack.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -28),
+            stack.leadingAnchor.constraint(equalTo: rootView.leadingAnchor, constant: 30),
+            stack.trailingAnchor.constraint(equalTo: rootView.trailingAnchor, constant: -30),
             stack.topAnchor.constraint(equalTo: rootView.topAnchor, constant: 26),
             stack.bottomAnchor.constraint(lessThanOrEqualTo: rootView.bottomAnchor, constant: -24),
             titleLabel.widthAnchor.constraint(equalTo: stack.widthAnchor),
@@ -151,24 +184,28 @@ final class PermissionSetupWindowController: NSWindowController {
         row.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
-            titleLabel.widthAnchor.constraint(equalToConstant: 130),
+            titleLabel.widthAnchor.constraint(equalToConstant: 170),
             statusLabel.widthAnchor.constraint(equalToConstant: 120),
-            actionButton.widthAnchor.constraint(equalToConstant: 210)
+            actionButton.widthAnchor.constraint(equalToConstant: 240)
         ])
 
         return row
     }
 
-    private func makeButtonRow(refreshButton: NSButton, doneButton: NSButton) -> NSView {
+    private func makeButtonRow(
+        refreshButton: NSButton,
+        relaunchButton: NSButton,
+        doneButton: NSButton
+    ) -> NSView {
         let spacer = NSView()
-        let row = NSStackView(views: [spacer, refreshButton, doneButton])
+        let row = NSStackView(views: [spacer, refreshButton, relaunchButton, doneButton])
         row.orientation = .horizontal
         row.alignment = .centerY
         row.spacing = 10
         row.translatesAutoresizingMaskIntoConstraints = false
         spacer.setContentHuggingPriority(.defaultLow, for: .horizontal)
         NSLayoutConstraint.activate([
-            row.widthAnchor.constraint(equalToConstant: 464)
+            row.widthAnchor.constraint(equalToConstant: 540)
         ])
         return row
     }
@@ -183,7 +220,16 @@ final class PermissionSetupWindowController: NSWindowController {
         update(state: readState())
     }
 
+    @objc private func handleKeyboardMonitoringButton() {
+        requestKeyboardMonitoringPermission()
+        if !readState().keyboardMonitoringTrusted {
+            openKeyboardMonitoringSettings()
+        }
+        update(state: readState())
+    }
+
     @objc private func handleAccessibilityButton() {
+        NSApp.activate(ignoringOtherApps: true)
         openAccessibilitySettings()
         update(state: readState())
     }
@@ -194,5 +240,9 @@ final class PermissionSetupWindowController: NSWindowController {
 
     @objc private func closeWindow() {
         window?.close()
+    }
+
+    @objc private func relaunch() {
+        relaunchApp()
     }
 }
