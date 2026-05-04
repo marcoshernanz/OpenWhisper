@@ -18,7 +18,7 @@ fi
 pkill -x OpenWhisper 2>/dev/null || true
 rm -rf "$DESTINATION"
 cp -R "$APP_DIR" "$DESTINATION"
-codesign --force --deep --sign - "$DESTINATION" >/dev/null
+"$ROOT_DIR/scripts/sign-app.sh" "$DESTINATION"
 
 mkdir -p "$CONFIG_DIR"
 /usr/libexec/PlistBuddy -c "Clear dict" "$CONFIG_FILE" >/dev/null

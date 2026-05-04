@@ -20,6 +20,6 @@ cp "$BIN_DIR/OpenWhisper" "$MACOS_DIR/OpenWhisper"
 cp "$ROOT_DIR/Resources/Info.plist" "$CONTENTS_DIR/Info.plist"
 chmod +x "$MACOS_DIR/OpenWhisper"
 
-codesign --force --deep --sign - "$APP_DIR" >/dev/null
+"$ROOT_DIR/scripts/sign-app.sh" "$APP_DIR"
 
 echo "$APP_DIR"
