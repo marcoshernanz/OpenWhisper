@@ -1,10 +1,9 @@
-import ApplicationServices
-import CoreGraphics
+import AppKit
 import Foundation
 
 final class FnKeyMonitor {
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
+    private var globalMonitor: Any?
+    private var localMonitor: Any?
     private var fnIsDown = false
     private let onChange: @Sendable (Bool) -> Void
 
@@ -13,56 +12,39 @@ final class FnKeyMonitor {
     }
 
     deinit {
-        if let runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), runLoopSource, .commonModes)
-        }
-        if let eventTap {
-            CFMachPortInvalidate(eventTap)
-        }
+        stop()
     }
 
     func start() throws {
-        let eventMask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
-        let opaqueSelf = Unmanaged.passUnretained(self).toOpaque()
+        guard globalMonitor == nil, localMonitor == nil else { return }
 
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: .listenOnly,
-            eventsOfInterest: eventMask,
-            callback: { _, type, event, refcon in
-                guard let refcon else {
-                    return Unmanaged.passUnretained(event)
-                }
-
-                let monitor = Unmanaged<FnKeyMonitor>
-                    .fromOpaque(refcon)
-                    .takeUnretainedValue()
-                monitor.handle(type: type, event: event)
-                return Unmanaged.passUnretained(event)
-            },
-            userInfo: opaqueSelf
-        ) else {
-            throw FnKeyMonitorError.eventTapUnavailable
+        globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handle(event: event)
         }
 
-        eventTap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        runLoopSource = source
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handle(event: event)
+            return event
+        }
+
+        guard globalMonitor != nil || localMonitor != nil else {
+            throw FnKeyMonitorError.monitorUnavailable
+        }
     }
 
-    private func handle(type: CGEventType, event: CGEvent) {
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let eventTap {
-                CGEvent.tapEnable(tap: eventTap, enable: true)
-            }
-            return
+    private func stop() {
+        if let globalMonitor {
+            NSEvent.removeMonitor(globalMonitor)
         }
+        if let localMonitor {
+            NSEvent.removeMonitor(localMonitor)
+        }
+        globalMonitor = nil
+        localMonitor = nil
+    }
 
-        guard type == .flagsChanged else { return }
-        let isDown = event.flags.contains(.maskSecondaryFn)
+    private func handle(event: NSEvent) {
+        let isDown = event.modifierFlags.contains(.function)
         guard isDown != fnIsDown else { return }
 
         fnIsDown = isDown
@@ -71,12 +53,12 @@ final class FnKeyMonitor {
 }
 
 enum FnKeyMonitorError: Error, LocalizedError {
-    case eventTapUnavailable
+    case monitorUnavailable
 
     var errorDescription: String? {
         switch self {
-        case .eventTapUnavailable:
-            return "Could not create a keyboard event tap. Grant Accessibility permission and relaunch OpenWhisper."
+        case .monitorUnavailable:
+            return "Could not start keyboard monitoring. Grant Accessibility permission and relaunch OpenWhisper."
         }
     }
 }
