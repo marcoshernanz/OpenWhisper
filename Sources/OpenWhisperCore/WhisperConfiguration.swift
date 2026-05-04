@@ -17,9 +17,11 @@ public struct WhisperConfiguration: Sendable, Equatable {
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> WhisperConfiguration {
         let repoRoot = inferRepoRoot(bundleURL: bundleURL, currentDirectoryURL: currentDirectoryURL)
+        let appSupportConfiguration = readAppSupportConfiguration()
         let executable = firstExistingPath(
             candidates: [
                 environment["OPENWHISPER_WHISPER_BIN"],
+                appSupportConfiguration.executablePath,
                 repoRoot.appendingPathComponent("Dependencies/whisper.cpp/build/bin/whisper-cli").path,
                 repoRoot.appendingPathComponent("Dependencies/whisper.cpp/build/bin/Release/whisper-cli").path,
                 "/opt/homebrew/bin/whisper-cli",
@@ -31,6 +33,7 @@ public struct WhisperConfiguration: Sendable, Equatable {
         let model = firstExistingPath(
             candidates: [
                 environment["OPENWHISPER_MODEL"],
+                appSupportConfiguration.modelPath,
                 repoRoot.appendingPathComponent("Models/ggml-large-v3-turbo.bin").path,
                 repoRoot.appendingPathComponent("Models/ggml-large-v3.bin").path,
                 repoRoot.appendingPathComponent("Models/ggml-medium.en.bin").path,
@@ -38,6 +41,7 @@ public struct WhisperConfiguration: Sendable, Equatable {
                 repoRoot.appendingPathComponent("Models/ggml-tiny.en.bin").path
             ]
         ) ?? expandHome(environment["OPENWHISPER_MODEL"])
+            ?? expandHome(appSupportConfiguration.modelPath)
             ?? repoRoot.appendingPathComponent("Models/ggml-large-v3-turbo.bin").path
 
         return WhisperConfiguration(
@@ -80,6 +84,35 @@ public struct WhisperConfiguration: Sendable, Equatable {
         candidates
             .compactMap(expandHome)
             .first { FileManager.default.fileExists(atPath: $0) }
+    }
+
+    private static func readAppSupportConfiguration() -> (executablePath: String?, modelPath: String?) {
+        guard let applicationSupportURL = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return (nil, nil)
+        }
+
+        let configurationURL = applicationSupportURL
+            .appendingPathComponent("OpenWhisper")
+            .appendingPathComponent("config.plist")
+
+        guard let data = try? Data(contentsOf: configurationURL),
+              let plist = try? PropertyListSerialization.propertyList(
+                from: data,
+                options: [],
+                format: nil
+              ),
+              let dictionary = plist as? [String: String]
+        else {
+            return (nil, nil)
+        }
+
+        return (
+            dictionary["whisperExecutable"],
+            dictionary["model"]
+        )
     }
 
     private static func expandHome(_ path: String?) -> String? {
