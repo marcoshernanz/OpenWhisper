@@ -6,7 +6,7 @@ CONFIGURATION="${1:-release}"
 
 cd "$ROOT_DIR"
 
-swift build -c "$CONFIGURATION"
+swift build -c "$CONFIGURATION" >&2
 BIN_DIR="$(swift build -c "$CONFIGURATION" --show-bin-path)"
 
 APP_DIR="$ROOT_DIR/.build/OpenWhisper.app"
