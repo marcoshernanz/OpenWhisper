@@ -17,14 +17,14 @@ final class AudioRecorder {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("openwhisper-\(UUID().uuidString).caf")
 
-        audioFile = try AVAudioFile(forWriting: url, settings: format.settings)
+        let file = try AVAudioFile(forWriting: url, settings: format.settings)
+        audioFile = file
         recordingURL = url
 
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { [weak self] buffer, _ in
-            guard let audioFile = self?.audioFile else { return }
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
             do {
-                try audioFile.write(from: buffer)
+                try file.write(from: buffer)
             } catch {
                 NSLog("OpenWhisper audio write failed: \(error.localizedDescription)")
             }
