@@ -13,13 +13,15 @@ OpenWhisper is a local-only macOS dictation app. Hold the `fn`/Globe key to reco
 
 ```sh
 scripts/setup-whisper.sh large-v3-turbo
-scripts/run-dev.sh
+scripts/install-app.sh
 ```
 
-On first launch, grant:
+This installs and opens `/Applications/OpenWhisper.app`. On first launch, OpenWhisper shows a setup window for:
 
 - Microphone permission, so OpenWhisper can record while `fn` is held.
 - Accessibility permission, so OpenWhisper can observe `fn` and paste the result.
+
+macOS does not allow apps to grant Accessibility permission automatically. Use OpenWhisper's setup window to open the right System Settings pane, then enable `OpenWhisper`.
 
 Then focus any text field, hold `fn`, speak, and release `fn`. No dictation text is inserted while the key is held.
 
@@ -55,3 +57,11 @@ The `fn`/Globe key is exposed by macOS as a function modifier flag. If macOS bui
 scripts/build-app.sh release
 open .build/OpenWhisper.app
 ```
+
+## Development Run
+
+```sh
+scripts/run-dev.sh
+```
+
+Development builds run from `.build/OpenWhisper.app`, so macOS may show that path in permission lists instead of `/Applications/OpenWhisper.app`. Use `scripts/install-app.sh` when testing permissions like a normal app.
