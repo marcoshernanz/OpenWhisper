@@ -66,6 +66,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         do {
+            guard CGPreflightListenEventAccess() else {
+                setStatus(.needsInputMonitoring)
+                showSetupWindow()
+                return
+            }
+
             try monitor.start()
             fnMonitor = monitor
         } catch {
@@ -97,7 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startDictation() {
         guard !isRecording, !isTranscribing else { return }
 
-        promptForAccessibilityIfNeeded()
+        guard CGPreflightListenEventAccess(), CGPreflightPostEventAccess() else {
+            setStatus(.needsAccessibility)
+            showSetupWindow()
+            return
+        }
 
         do {
             try audioRecorder.start()
@@ -165,16 +175,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func promptForAccessibilityIfNeeded() {
-        guard !AXIsProcessTrusted(), !accessibilityPromptShown else { return }
+        guard !CGPreflightPostEventAccess(), !accessibilityPromptShown else { return }
         accessibilityPromptShown = true
-        let options = [
-            "AXTrustedCheckOptionPrompt": true
-        ] as CFDictionary
-        _ = AXIsProcessTrustedWithOptions(options)
+        _ = CGRequestPostEventAccess()
     }
 
     private var permissionsNeedSetup: Bool {
-        AVCaptureDevice.authorizationStatus(for: .audio) != .authorized || !AXIsProcessTrusted()
+        AVCaptureDevice.authorizationStatus(for: .audio) != .authorized
+            || !CGPreflightListenEventAccess()
+            || !CGPreflightPostEventAccess()
     }
 
     private func showSetupWindowIfNeeded() {
@@ -191,13 +200,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 openAccessibilitySettings: {
                     SettingsOpener.openAccessibilitySettings()
                 },
+                requestKeyboardMonitoringPermission: {
+                    _ = CGRequestListenEventAccess()
+                },
+                openKeyboardMonitoringSettings: {
+                    SettingsOpener.openInputMonitoringSettings()
+                },
                 openMicrophoneSettings: {
                     SettingsOpener.openMicrophoneSettings()
+                },
+                relaunchApp: {
+                    AppRelauncher.relaunch()
                 },
                 readState: {
                     PermissionSetupState(
                         microphoneStatus: AVCaptureDevice.authorizationStatus(for: .audio),
-                        accessibilityTrusted: AXIsProcessTrusted()
+                        keyboardMonitoringTrusted: CGPreflightListenEventAccess(),
+                        accessibilityTrusted: CGPreflightPostEventAccess()
                     )
                 }
             )
@@ -212,7 +231,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         setupWindowController?.update(
             state: PermissionSetupState(
                 microphoneStatus: AVCaptureDevice.authorizationStatus(for: .audio),
-                accessibilityTrusted: AXIsProcessTrusted()
+                keyboardMonitoringTrusted: CGPreflightListenEventAccess(),
+                accessibilityTrusted: CGPreflightPostEventAccess()
             )
         )
     }
@@ -258,6 +278,7 @@ private enum AppStatus {
     case idle
     case recording
     case transcribing
+    case needsInputMonitoring
     case needsAccessibility
     case needsMicrophone
     case error
@@ -270,6 +291,8 @@ private enum AppStatus {
             return "OW rec"
         case .transcribing:
             return "OW ..."
+        case .needsInputMonitoring:
+            return "OW keys"
         case .needsAccessibility:
             return "OW AX"
         case .needsMicrophone:
@@ -287,6 +310,8 @@ private enum AppStatus {
             return "Recording. Release fn to transcribe."
         case .transcribing:
             return "Transcribing locally."
+        case .needsInputMonitoring:
+            return "Input Monitoring permission required."
         case .needsAccessibility:
             return "Accessibility permission required."
         case .needsMicrophone:
