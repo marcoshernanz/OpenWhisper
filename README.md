@@ -19,10 +19,9 @@ scripts/install-app.sh
 This installs and opens `/Applications/OpenWhisper.app`. On first launch, OpenWhisper shows a setup window for:
 
 - Microphone permission, so OpenWhisper can record while `fn` is held.
-- Keyboard Monitoring permission, so OpenWhisper can observe `fn`.
-- Accessibility permission, so OpenWhisper can paste the result.
+- Accessibility permission, so OpenWhisper can observe `fn` and paste the result.
 
-macOS does not allow apps to grant Keyboard Monitoring or Accessibility permission automatically. Use OpenWhisper's setup window to open the right System Settings panes, enable `OpenWhisper`, then relaunch OpenWhisper from the setup window.
+macOS does not allow apps to grant Accessibility permission automatically. Use OpenWhisper's setup window to open the right System Settings pane, enable `OpenWhisper`, then relaunch OpenWhisper from the setup window.
 
 Then focus any text field, hold `fn`, speak, and release `fn`. No dictation text is inserted while the key is held.
 
