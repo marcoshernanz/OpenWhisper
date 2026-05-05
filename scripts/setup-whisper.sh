@@ -14,7 +14,7 @@ if [[ ! -d "$WHISPER_DIR/.git" ]]; then
 fi
 
 cmake -S "$WHISPER_DIR" -B "$WHISPER_DIR/build" -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release
-cmake --build "$WHISPER_DIR/build" --config Release --target whisper-cli -j
+cmake --build "$WHISPER_DIR/build" --config Release --target whisper-cli whisper-server -j
 
 if [[ ! -f "$MODEL_FILE" ]]; then
   curl --fail --location --continue-at - \
@@ -25,6 +25,9 @@ fi
 cat <<EOF
 whisper.cpp executable:
   $WHISPER_DIR/build/bin/whisper-cli
+
+whisper.cpp server:
+  $WHISPER_DIR/build/bin/whisper-server
 
 model:
   $MODEL_FILE
