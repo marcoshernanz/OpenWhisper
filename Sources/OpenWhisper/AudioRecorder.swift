@@ -6,7 +6,7 @@ final class AudioRecorder {
     private var audioFile: AVAudioFile?
     private var recordingURL: URL?
 
-    func start() throws {
+    func start(levelHandler: ((Float) -> Void)? = nil) throws {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             throw RecordingError.microphonePermissionRequired
         }
@@ -27,6 +27,10 @@ final class AudioRecorder {
             } catch {
                 NSLog("OpenWhisper audio write failed: \(error.localizedDescription)")
             }
+
+            if let levelHandler {
+                levelHandler(Self.normalizedLevel(from: buffer))
+            }
         }
 
         engine.prepare()
@@ -44,6 +48,36 @@ final class AudioRecorder {
 
         recordingURL = nil
         return url
+    }
+
+    private static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Float {
+        guard let channelData = buffer.floatChannelData else { return 0 }
+
+        let channelCount = min(Int(buffer.format.channelCount), 2)
+        let frameCount = Int(buffer.frameLength)
+        guard channelCount > 0, frameCount > 0 else { return 0 }
+
+        var sum: Float = 0
+        var sampleCount = 0
+        let sampleStride = max(1, frameCount / 512)
+
+        for channel in 0..<channelCount {
+            let samples = channelData[channel]
+            var frame = 0
+            while frame < frameCount {
+                let sample = samples[frame]
+                sum += sample * sample
+                sampleCount += 1
+                frame += sampleStride
+            }
+        }
+
+        guard sampleCount > 0 else { return 0 }
+
+        let rms = sqrt(sum / Float(sampleCount))
+        let decibels = 20 * log10(max(rms, 0.000_01))
+        let normalized = (decibels + 52) / 44
+        return min(1, max(0, normalized))
     }
 }
 
