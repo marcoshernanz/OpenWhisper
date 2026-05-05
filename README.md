@@ -25,12 +25,17 @@ macOS does not allow apps to grant Accessibility permission automatically. Use O
 
 Then focus any text field, hold `fn`, speak, and release `fn`. No dictation text is inserted while the key is held.
 
+OpenWhisper starts a local `whisper-server` when the app launches so the model stays loaded between dictations. The first launch can take several seconds while the model loads; after that, releasing `fn` should insert text much faster because OpenWhisper does not reload the model for every recording.
+
+English is the default recognition language because whisper.cpp's automatic language detection adds several seconds to short dictations. Set `OPENWHISPER_LANGUAGE=auto` if you need multilingual detection and can accept the extra latency.
+
 ## Runtime Configuration
 
 The default setup expects:
 
 ```text
 Dependencies/whisper.cpp/build/bin/whisper-cli
+Dependencies/whisper.cpp/build/bin/whisper-server
 Models/ggml-large-v3-turbo.bin
 ```
 
@@ -38,10 +43,15 @@ Override those paths when launching from a shell:
 
 ```sh
 OPENWHISPER_WHISPER_BIN=/path/to/whisper-cli \
+OPENWHISPER_SERVER_BIN=/path/to/whisper-server \
 OPENWHISPER_MODEL=/path/to/ggml-large-v3-turbo.bin \
-OPENWHISPER_LANGUAGE=auto \
+OPENWHISPER_LANGUAGE=en \
+OPENWHISPER_THREADS=8 \
+OPENWHISPER_AUDIO_CONTEXT=512 \
 .build/OpenWhisper.app/Contents/MacOS/OpenWhisper
 ```
+
+The local server listens on `127.0.0.1:58442` by default. Override it with `OPENWHISPER_SERVER_HOST` and `OPENWHISPER_SERVER_PORT` if that port is already in use. `OPENWHISPER_THREADS` defaults to a conservative value based on your CPU core count. `OPENWHISPER_AUDIO_CONTEXT=512` is tuned for low-latency short dictation; set it to `0` to use Whisper's full audio context.
 
 ## Local-Only Behavior
 
