@@ -1,7 +1,6 @@
 import AVFoundation
 import Foundation
 
-@MainActor
 final class AudioRecorder {
     private let engine = AVAudioEngine()
     private var audioFile: AVAudioFile?
