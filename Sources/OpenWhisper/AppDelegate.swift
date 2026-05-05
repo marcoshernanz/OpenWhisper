@@ -9,21 +9,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let audioRecorder = AudioRecorder()
     private let audioConverter = AudioConverter()
+    private lazy var whisperConfiguration = WhisperConfiguration.resolved(bundleURL: Bundle.main.bundleURL)
     private lazy var transcriber = WhisperTranscriber(
-        configuration: WhisperConfiguration.resolved(bundleURL: Bundle.main.bundleURL)
+        configuration: whisperConfiguration
     )
 
     private var fnMonitor: FnKeyMonitor?
     private var setupWindowController: PermissionSetupWindowController?
     private var isRecording = false
     private var isTranscribing = false
+    private var isWarmingUp = false
+    private var isTerminating = false
     private var accessibilityPromptShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
+        warmUpTranscriberIfPossible()
         requestMicrophoneAccess()
         startFnMonitor()
         showSetupWindowIfNeeded()
+    }
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !isTerminating else { return .terminateNow }
+        isTerminating = true
+
+        let transcriber = self.transcriber
+        Task {
+            await transcriber.stopServer()
+            await MainActor.run {
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+        }
+
+        return .terminateLater
     }
 
     private func configureStatusItem() {
@@ -91,6 +110,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         default:
             setStatus(.needsMicrophone)
+        }
+    }
+
+    private func warmUpTranscriberIfPossible() {
+        guard whisperConfiguration.missingServerRequirementMessage == nil else { return }
+
+        isWarmingUp = true
+        setStatus(.warmingUp)
+
+        let transcriber = self.transcriber
+        Task {
+            await transcriber.warmUpServer()
+            await MainActor.run {
+                self.isWarmingUp = false
+                if !self.isRecording && !self.isTranscribing {
+                    self.setStatus(self.currentReadyStatus)
+                }
+            }
         }
     }
 
@@ -182,6 +219,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             || !AXIsProcessTrusted()
     }
 
+    private var currentReadyStatus: AppStatus {
+        if AVCaptureDevice.authorizationStatus(for: .audio) != .authorized {
+            return .needsMicrophone
+        }
+
+        if !AXIsProcessTrusted() {
+            return .needsAccessibility
+        }
+
+        return isWarmingUp ? .warmingUp : .idle
+    }
+
     private func showSetupWindowIfNeeded() {
         guard permissionsNeedSetup else { return }
         showSetupWindow()
@@ -264,6 +313,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 private enum AppStatus {
     case idle
+    case warmingUp
     case recording
     case transcribing
     case needsAccessibility
@@ -274,6 +324,8 @@ private enum AppStatus {
         switch self {
         case .idle:
             return "OW"
+        case .warmingUp:
+            return "OW load"
         case .recording:
             return "OW rec"
         case .transcribing:
@@ -291,6 +343,8 @@ private enum AppStatus {
         switch self {
         case .idle:
             return "Hold fn to dictate. Text is inserted after release."
+        case .warmingUp:
+            return "Loading the local Whisper model."
         case .recording:
             return "Recording. Release fn to transcribe."
         case .transcribing:
