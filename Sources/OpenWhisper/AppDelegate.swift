@@ -9,6 +9,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let audioRecorder = AudioRecorder()
     private let audioConverter = AudioConverter()
+    private let dictationOverlay = DictationOverlayWindowController()
     private lazy var whisperConfiguration = WhisperConfiguration.resolved(bundleURL: Bundle.main.bundleURL)
     private lazy var transcriber = WhisperTranscriber(
         configuration: whisperConfiguration
@@ -20,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isTranscribing = false
     private var isWarmingUp = false
     private var isTerminating = false
+    private var transcriptionQueue: [URL] = []
     private var accessibilityPromptShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -132,7 +134,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func startDictation() {
-        guard !isRecording, !isTranscribing else { return }
+        guard !isRecording else { return }
 
         guard AXIsProcessTrusted() else {
             setStatus(.needsAccessibility)
@@ -140,11 +142,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        dictationOverlay.show()
+
         do {
-            try audioRecorder.start()
+            let overlay = dictationOverlay
+            try audioRecorder.start { level in
+                Task { @MainActor in
+                    overlay.updateLevel(level)
+                }
+            }
             isRecording = true
-            setStatus(.recording)
+            refreshActivityStatus()
         } catch {
+            dictationOverlay.hide()
             setStatus(.error)
             if permissionsNeedSetup {
                 showSetupWindow()
@@ -160,17 +170,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func finishDictation() {
         guard isRecording else { return }
         isRecording = false
+        dictationOverlay.hide()
 
         let recordingURL: URL
         do {
             recordingURL = try audioRecorder.stop()
         } catch {
+            dictationOverlay.hide()
             setStatus(.error)
             return
         }
 
+        enqueueForTranscription(recordingURL)
+    }
+
+    private func enqueueForTranscription(_ recordingURL: URL) {
+        transcriptionQueue.append(recordingURL)
+        processNextQueuedRecording()
+        refreshActivityStatus()
+    }
+
+    private func processNextQueuedRecording() {
+        guard !isTranscribing else {
+            refreshActivityStatus()
+            return
+        }
+
+        guard !transcriptionQueue.isEmpty else {
+            refreshActivityStatus()
+            return
+        }
+
+        let recordingURL = transcriptionQueue.removeFirst()
         isTranscribing = true
-        setStatus(.transcribing)
+        refreshActivityStatus()
 
         Task {
             do {
@@ -187,12 +220,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 await MainActor.run {
                     self.isTranscribing = false
-                    self.setStatus(.idle)
                     if !transcript.isEmpty {
                         TextInserter.insert(transcript)
                     }
+                    self.processNextQueuedRecording()
                 }
             } catch {
+                try? FileManager.default.removeItem(at: recordingURL)
+
                 await MainActor.run {
                     self.isTranscribing = false
                     self.setStatus(.error)
@@ -200,6 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         title: "Transcription Failed",
                         message: error.localizedDescription
                     )
+                    self.processNextQueuedRecording()
                 }
             }
         }
@@ -229,6 +265,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         return isWarmingUp ? .warmingUp : .idle
+    }
+
+    private func refreshActivityStatus() {
+        if isRecording {
+            setStatus(.recording)
+        } else if isTranscribing || !transcriptionQueue.isEmpty {
+            setStatus(.transcribing)
+        } else {
+            setStatus(currentReadyStatus)
+        }
     }
 
     private func showSetupWindowIfNeeded() {
