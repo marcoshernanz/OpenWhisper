@@ -10,16 +10,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let audioRecorder = AudioRecorder()
-    private let audioConverter = AudioConverter()
     private let dictationOverlay = DictationOverlayWindowController()
     private var manualPasteHotKeyMonitor: ManualPasteHotKeyMonitor?
-    private lazy var whisperConfiguration = WhisperConfiguration.resolved(bundleURL: Bundle.main.bundleURL)
-    private lazy var transcriber = WhisperTranscriber(
-        configuration: whisperConfiguration
-    )
+    private var whisperConfiguration: WhisperConfiguration?
+    private var transcriber: WhisperTranscriber?
 
     private var fnMonitor: FnKeyMonitor?
     private var setupWindowController: PermissionSetupWindowController?
+    private var engineMenuItems: [NSMenuItem] = []
+    private var qualityMenuItems: [NSMenuItem] = []
+    private var modelMenuItems: [NSMenuItem] = []
+    private var cleanupMenuItems: [NSMenuItem] = []
+    private var transcriberReloadGeneration = 0
     private var isRecording = false
     private var isTranscribing = false
     private var isWarmingUp = false
@@ -30,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var accessibilityPromptShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        configureTranscriberFromSettings(warmUp: false)
         configureStatusItem()
         restoreLastTranscript()
         warmUpTranscriberIfPossible()
@@ -45,7 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let transcriber = self.transcriber
         Task {
-            await transcriber.stopServer()
+            await transcriber?.stopServer()
             await MainActor.run {
                 sender.reply(toApplicationShouldTerminate: true)
             }
@@ -70,6 +73,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(openSetupInstructions),
             keyEquivalent: ""
         ))
+        addSettingsMenus(to: menu)
+        menu.addItem(NSMenuItem.separator())
         let pasteLastTranscriptMenuItem = NSMenuItem(
             title: "Paste Last Transcript",
             action: #selector(pasteLastTranscript),
@@ -88,7 +93,151 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ))
         statusItem.menu = menu
 
-        setStatus(.idle)
+        updateSettingsMenuItems()
+        setStatus(currentReadyStatus)
+    }
+
+    private func addSettingsMenus(to menu: NSMenu) {
+        let engineMenuItem = NSMenuItem(title: "Engine", action: nil, keyEquivalent: "")
+        let engineMenu = NSMenu()
+        engineMenuItems = LocalTranscriptionEngine.allCases.map { engine in
+            let item = NSMenuItem(
+                title: engine.displayName,
+                action: #selector(selectTranscriptionEngine(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = engine.rawValue
+            engineMenu.addItem(item)
+            return item
+        }
+        menu.addItem(engineMenuItem)
+        menu.setSubmenu(engineMenu, for: engineMenuItem)
+
+        let qualityMenuItem = NSMenuItem(title: "Quality", action: nil, keyEquivalent: "")
+        let qualityMenu = NSMenu()
+        qualityMenuItems = TranscriptionQualityProfile.allCases.map { profile in
+            let item = NSMenuItem(
+                title: profile.displayName,
+                action: #selector(selectQualityProfile(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = profile.rawValue
+            qualityMenu.addItem(item)
+            return item
+        }
+        menu.addItem(qualityMenuItem)
+        menu.setSubmenu(qualityMenu, for: qualityMenuItem)
+
+        let modelMenuItem = NSMenuItem(title: "Model", action: nil, keyEquivalent: "")
+        let modelMenu = NSMenu()
+        modelMenuItems = WhisperModelOption.allCases.map { option in
+            let item = NSMenuItem(
+                title: option.displayName,
+                action: #selector(selectModelOption(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = option.rawValue
+            modelMenu.addItem(item)
+            return item
+        }
+        menu.addItem(modelMenuItem)
+        menu.setSubmenu(modelMenu, for: modelMenuItem)
+
+        let cleanupMenuItem = NSMenuItem(title: "Cleanup", action: nil, keyEquivalent: "")
+        let cleanupMenu = NSMenu()
+        cleanupMenuItems = TranscriptCleanupMode.allCases.map { mode in
+            let item = NSMenuItem(
+                title: mode.displayName,
+                action: #selector(selectCleanupMode(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = mode.rawValue
+            cleanupMenu.addItem(item)
+            return item
+        }
+        menu.addItem(cleanupMenuItem)
+        menu.setSubmenu(cleanupMenu, for: cleanupMenuItem)
+    }
+
+    private func configureTranscriberFromSettings(warmUp: Bool = true) {
+        let previousTranscriber = transcriber
+        let configuration = WhisperConfiguration.resolved(bundleURL: Bundle.main.bundleURL)
+        let nextTranscriber = WhisperTranscriber(configuration: configuration)
+        transcriberReloadGeneration += 1
+        let generation = transcriberReloadGeneration
+
+        whisperConfiguration = configuration
+        updateSettingsMenuItems()
+
+        guard warmUp else {
+            transcriber = nextTranscriber
+            return
+        }
+
+        transcriber = nil
+        isWarmingUp = true
+        refreshActivityStatus()
+
+        Task {
+            await previousTranscriber?.stopServer()
+
+            await MainActor.run {
+                guard self.transcriberReloadGeneration == generation else { return }
+                self.transcriber = nextTranscriber
+            }
+
+            if configuration.canWarmUpTranscriber {
+                await nextTranscriber.warmUpServer()
+            }
+
+            await MainActor.run {
+                guard self.transcriberReloadGeneration == generation else { return }
+                self.isWarmingUp = false
+                self.refreshActivityStatus()
+            }
+        }
+    }
+
+    private func updateSettingsMenuItems() {
+        guard let whisperConfiguration else { return }
+
+        for item in engineMenuItems {
+            let engine = LocalTranscriptionEngine(rawValue: item.representedObject as? String ?? "")
+            item.state = engine == whisperConfiguration.transcriptionEngine ? .on : .off
+        }
+
+        for item in qualityMenuItems {
+            let profile = TranscriptionQualityProfile(rawValue: item.representedObject as? String ?? "")
+            item.state = profile == whisperConfiguration.qualityProfile ? .on : .off
+        }
+
+        for item in modelMenuItems {
+            guard let option = WhisperModelOption(rawValue: item.representedObject as? String ?? "") else {
+                continue
+            }
+
+            let modelURL = modelURL(for: option)
+            let isInstalled = FileManager.default.fileExists(atPath: modelURL.path)
+            item.title = isInstalled ? option.displayName : "\(option.displayName) - Download Required"
+            item.state = option == whisperConfiguration.modelOption ? .on : .off
+        }
+
+        for item in cleanupMenuItems {
+            let mode = TranscriptCleanupMode(rawValue: item.representedObject as? String ?? "")
+            item.state = mode == whisperConfiguration.cleanupMode ? .on : .off
+        }
+    }
+
+    private func modelURL(for option: WhisperModelOption) -> URL {
+        let modelsDirectory = whisperConfiguration?.modelURL.deletingLastPathComponent()
+            ?? URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+                .appendingPathComponent("Models")
+
+        return modelsDirectory.appendingPathComponent(option.fileName)
     }
 
     private func startFnMonitor() {
@@ -149,12 +298,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func warmUpTranscriberIfPossible() {
-        guard whisperConfiguration.missingServerRequirementMessage == nil else { return }
+        guard let whisperConfiguration,
+              let transcriber,
+              whisperConfiguration.canWarmUpTranscriber
+        else {
+            return
+        }
 
         isWarmingUp = true
         setStatus(.warmingUp)
 
-        let transcriber = self.transcriber
         Task {
             await transcriber.warmUpServer()
             await MainActor.run {
@@ -176,6 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         dictationOverlay.show()
+        warmTranscriberDuringRecording()
 
         do {
             let overlay = dictationOverlay
@@ -197,6 +351,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     message: error.localizedDescription
                 )
             }
+        }
+    }
+
+    private func warmTranscriberDuringRecording() {
+        guard let whisperConfiguration,
+              let transcriber,
+              whisperConfiguration.canWarmUpTranscriber
+        else {
+            return
+        }
+
+        Task {
+            await transcriber.warmUpServer()
         }
     }
 
@@ -234,22 +401,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        guard let transcriber else {
+            refreshActivityStatus()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+                self?.processNextQueuedRecording()
+            }
+            return
+        }
+
         let recordingURL = transcriptionQueue.removeFirst()
         isTranscribing = true
         refreshActivityStatus()
 
         Task {
             do {
-                let wavURL = FileManager.default.temporaryDirectory
-                    .appendingPathComponent("openwhisper-\(UUID().uuidString).wav")
-                try await audioConverter.convertToWhisperWav(
-                    inputURL: recordingURL,
-                    outputURL: wavURL
-                )
-
-                let transcript = try await transcriber.transcribe(wavURL: wavURL)
+                let transcript = try await transcriber.transcribe(wavURL: recordingURL)
                 try? FileManager.default.removeItem(at: recordingURL)
-                try? FileManager.default.removeItem(at: wavURL)
 
                 await MainActor.run {
                     self.isTranscribing = false
@@ -296,6 +463,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if !AXIsProcessTrusted() {
             return .needsAccessibility
+        }
+
+        if whisperConfiguration?.transcriptionEngine == .whisperCpp,
+           whisperConfiguration?.missingServerRequirementMessage != nil {
+            return .missingModel
         }
 
         return isWarmingUp ? .warmingUp : .idle
@@ -388,6 +560,60 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(readmeURL())
     }
 
+    @objc private func selectTranscriptionEngine(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              LocalTranscriptionEngine(rawValue: rawValue) != nil
+        else {
+            return
+        }
+
+        UserDefaults.standard.set(rawValue, forKey: OpenWhisperDefaultsKey.transcriptionEngine)
+        configureTranscriberFromSettings()
+    }
+
+    @objc private func selectQualityProfile(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              TranscriptionQualityProfile(rawValue: rawValue) != nil
+        else {
+            return
+        }
+
+        UserDefaults.standard.set(rawValue, forKey: OpenWhisperDefaultsKey.qualityProfile)
+        configureTranscriberFromSettings()
+    }
+
+    @objc private func selectModelOption(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              let option = WhisperModelOption(rawValue: rawValue)
+        else {
+            return
+        }
+
+        let url = modelURL(for: option)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            showOneTimeAlert(
+                title: "Model Not Installed",
+                message: "Install it first from the repo with:\n\nscripts/setup-whisper.sh \(option.setupArgument)"
+            )
+            updateSettingsMenuItems()
+            return
+        }
+
+        UserDefaults.standard.set(rawValue, forKey: OpenWhisperDefaultsKey.modelOption)
+        configureTranscriberFromSettings()
+    }
+
+    @objc private func selectCleanupMode(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              TranscriptCleanupMode(rawValue: rawValue) != nil
+        else {
+            return
+        }
+
+        UserDefaults.standard.set(rawValue, forKey: OpenWhisperDefaultsKey.cleanupMode)
+        configureTranscriberFromSettings()
+    }
+
     @objc private func pasteLastTranscript() {
         guard let transcript = lastTranscript ?? UserDefaults.standard.string(forKey: Self.lastTranscriptDefaultsKey),
               !transcript.isEmpty
@@ -442,6 +668,7 @@ private enum AppStatus {
     case transcribing
     case needsAccessibility
     case needsMicrophone
+    case missingModel
     case error
 
     var menuTitle: String {
@@ -458,6 +685,8 @@ private enum AppStatus {
             return "OW AX"
         case .needsMicrophone:
             return "OW mic"
+        case .missingModel:
+            return "OW model"
         case .error:
             return "OW !"
         }
@@ -477,8 +706,16 @@ private enum AppStatus {
             return "Accessibility permission required."
         case .needsMicrophone:
             return "Microphone permission required."
+        case .missingModel:
+            return "Selected Whisper model is not installed."
         case .error:
             return "OpenWhisper needs attention."
         }
+    }
+}
+
+private extension WhisperConfiguration {
+    var canWarmUpTranscriber: Bool {
+        transcriptionEngine == .whisperKit || missingServerRequirementMessage == nil
     }
 }
