@@ -15,8 +15,12 @@ public actor WhisperServerProcess {
     }
 
     public func ensureReady() async throws -> Bool {
-        if await isHealthy() {
+        if process?.isRunning == true, await isHealthy() {
             return false
+        }
+
+        if process?.isRunning != true {
+            await terminateStaleServerIfNeeded()
         }
 
         try startIfNeeded()
@@ -44,16 +48,26 @@ public actor WhisperServerProcess {
 
         let process = Process()
         process.executableURL = configuration.serverExecutableURL
-        process.arguments = [
+        var arguments = [
             "-m", configuration.modelURL.path,
             "--host", configuration.serverHost,
             "--port", "\(configuration.serverPort)",
             "-t", "\(configuration.serverThreadCount)",
-            "-bo", "1",
-            "-bs", "1",
+            "-bo", "\(configuration.bestOf)",
+            "-bs", "\(configuration.beamSize)",
+            "-ac", "\(configuration.audioContext)",
             "-nt",
             "-l", configuration.language
         ]
+
+        if configuration.suppressNonSpeechTokens {
+            arguments.append("-sns")
+        }
+
+        if !configuration.initialPrompt.isEmpty {
+            arguments.append(contentsOf: ["--prompt", configuration.initialPrompt])
+        }
+        process.arguments = arguments
 
         let stdoutPipe = Pipe()
         let stderrPipe = Pipe()
@@ -100,6 +114,20 @@ public actor WhisperServerProcess {
         }
 
         throw TranscriptionError.serverUnavailable("Timed out waiting for whisper-server to load the model.")
+    }
+
+    private func terminateStaleServerIfNeeded() async {
+        guard await isHealthy() else { return }
+
+        _ = try? await Shell.run(
+            executableURL: URL(fileURLWithPath: "/usr/bin/pkill"),
+            arguments: [
+                "-f",
+                "\(configuration.serverExecutableURL.path).*--port \(configuration.serverPort)"
+            ]
+        )
+
+        try? await Task.sleep(nanoseconds: 300_000_000)
     }
 
     private func isHealthy() async -> Bool {
