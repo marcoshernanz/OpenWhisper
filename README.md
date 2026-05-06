@@ -1,6 +1,6 @@
 # OpenWhisper
 
-OpenWhisper is a local-only macOS dictation app. Hold the `fn`/Globe key to record, release it to transcribe locally with whisper.cpp, and the final text is pasted into the focused app only after release.
+OpenWhisper is a local-only macOS dictation app. Hold the `fn`/Globe key to record, release it to transcribe locally with WhisperKit by default, and the final text is pasted into the focused app only after release.
 
 ## Requirements
 
@@ -12,7 +12,6 @@ OpenWhisper is a local-only macOS dictation app. Hold the `fn`/Globe key to reco
 ## Quick Start
 
 ```sh
-scripts/setup-whisper.sh large-v3-turbo
 scripts/install-app.sh
 ```
 
@@ -25,13 +24,26 @@ macOS does not allow apps to grant Accessibility permission automatically. Use O
 
 Then focus any text field, hold `fn`, speak, and release `fn`. No dictation text is inserted while the key is held.
 
-OpenWhisper starts a local `whisper-server` when the app launches so the model stays loaded between dictations. The first launch can take several seconds while the model loads; after that, releasing `fn` should insert text much faster because OpenWhisper does not reload the model for every recording.
+OpenWhisper downloads Argmax's Core ML WhisperKit model on first use and warms it in the background. The first launch can take a few minutes while the model downloads and Core ML specializes it for your Mac; after that, releasing `fn` should insert text much faster because OpenWhisper keeps the local model path warm.
 
-English is the default recognition language because whisper.cpp's automatic language detection adds several seconds to short dictations. Set `OPENWHISPER_LANGUAGE=auto` if you need multilingual detection and can accept the extra latency.
+English is the default recognition language because automatic language detection adds latency to short dictations. Set `OPENWHISPER_LANGUAGE=auto` if you need multilingual detection and can accept the extra latency.
+
+Use the menu bar app to choose:
+
+- Engine: WhisperKit or whisper.cpp. WhisperKit is the default local engine because it uses Apple Silicon/Core ML and downloads Argmax's recommended `openai_whisper-large-v3-v20240930_626MB` model on first use. whisper.cpp remains available as a fallback.
+- Quality: Fast, Balanced, or Accurate. Balanced is the default because it keeps `large-v3-turbo` fast while using full audio context and a small decoding search for better dictation quality. Fast keeps the lowest-latency short audio context; Accurate increases decoding search further.
+- Model: Large v3 Turbo, Large v3, Distil Large v3, Medium English, Small English, Base English, or Tiny English. Models marked "Download Required" are not on disk yet; install them with `scripts/setup-whisper.sh <model>`.
+- Cleanup: Off, Light, or Dictation. Cleanup runs locally after transcription and before the one final paste.
 
 ## Runtime Configuration
 
-The default setup expects:
+The WhisperKit engine is the default and stores downloaded Core ML models under:
+
+```text
+~/Library/Application Support/OpenWhisper/WhisperKit
+```
+
+The optional whisper.cpp fallback expects:
 
 ```text
 Dependencies/whisper.cpp/build/bin/whisper-cli
@@ -47,15 +59,27 @@ OPENWHISPER_SERVER_BIN=/path/to/whisper-server \
 OPENWHISPER_MODEL=/path/to/ggml-large-v3-turbo.bin \
 OPENWHISPER_LANGUAGE=en \
 OPENWHISPER_THREADS=8 \
-OPENWHISPER_AUDIO_CONTEXT=512 \
+OPENWHISPER_ENGINE=whisperKit \
+OPENWHISPER_WHISPERKIT_MODEL=openai_whisper-large-v3-v20240930_626MB \
+OPENWHISPER_QUALITY=balanced \
+OPENWHISPER_MODEL_OPTION=large-v3-turbo \
+OPENWHISPER_CLEANUP=dictation \
 .build/OpenWhisper.app/Contents/MacOS/OpenWhisper
 ```
 
-The local server listens on `127.0.0.1:58442` by default. Override it with `OPENWHISPER_SERVER_HOST` and `OPENWHISPER_SERVER_PORT` if that port is already in use. `OPENWHISPER_THREADS` defaults to a conservative value based on your CPU core count. `OPENWHISPER_AUDIO_CONTEXT=512` is tuned for low-latency short dictation; set it to `0` to use Whisper's full audio context.
+Install whisper.cpp fallback models before selecting them in the menu:
+
+```sh
+scripts/setup-whisper.sh large-v3
+scripts/setup-whisper.sh distil-large-v3
+scripts/setup-whisper.sh medium.en
+```
+
+The local server listens on `127.0.0.1:58442` by default when the whisper.cpp engine is selected. Override it with `OPENWHISPER_SERVER_HOST` and `OPENWHISPER_SERVER_PORT` if that port is already in use. `OPENWHISPER_THREADS` defaults to a conservative value based on your CPU core count. `OPENWHISPER_ENGINE=whisperKit|whisperCpp`, `OPENWHISPER_WHISPERKIT_MODEL=openai_whisper-large-v3-v20240930_626MB`, `OPENWHISPER_QUALITY=fast|balanced|accurate`, `OPENWHISPER_MODEL_OPTION=large-v3-turbo|large-v3|distil-large-v3|medium.en|small.en|base.en|tiny.en`, and `OPENWHISPER_CLEANUP=off|light|dictation` override the menu settings for development. The default local path is WhisperKit; whisper.cpp uses `large-v3-turbo` as its best installed quality/speed fallback.
 
 ## Local-Only Behavior
 
-Runtime dictation does not use network services. Audio is written to a temporary local file, converted locally with `afconvert`, transcribed locally with whisper.cpp, inserted into the focused app, then the temporary files are removed.
+Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` is held, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after release, then the temporary file is removed.
 
 ## fn Key Notes
 
