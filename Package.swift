@@ -11,8 +11,16 @@ let package = Package(
         .executable(name: "OpenWhisper", targets: ["OpenWhisper"]),
         .library(name: "OpenWhisperCore", targets: ["OpenWhisperCore"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "0.9.0")
+    ],
     targets: [
-        .target(name: "OpenWhisperCore"),
+        .target(
+            name: "OpenWhisperCore",
+            dependencies: [
+                .product(name: "WhisperKit", package: "argmax-oss-swift")
+            ]
+        ),
         .executableTarget(
             name: "OpenWhisper",
             dependencies: ["OpenWhisperCore"]

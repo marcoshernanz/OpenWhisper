@@ -53,13 +53,18 @@ public struct WhisperServerClient: Sendable {
         var body = Data()
 
         appendField(name: "response_format", value: "text", boundary: boundary, to: &body)
-        appendField(name: "temperature", value: "0.0", boundary: boundary, to: &body)
-        appendField(name: "temperature_inc", value: "0.0", boundary: boundary, to: &body)
-        appendField(name: "best_of", value: "1", boundary: boundary, to: &body)
-        appendField(name: "beam_size", value: "1", boundary: boundary, to: &body)
+        appendField(name: "temperature", value: format(configuration.temperature), boundary: boundary, to: &body)
+        appendField(name: "temperature_inc", value: format(configuration.temperatureIncrement), boundary: boundary, to: &body)
+        appendField(name: "best_of", value: "\(configuration.bestOf)", boundary: boundary, to: &body)
+        appendField(name: "beam_size", value: "\(configuration.beamSize)", boundary: boundary, to: &body)
         appendField(name: "audio_ctx", value: "\(configuration.audioContext)", boundary: boundary, to: &body)
         appendField(name: "no_timestamps", value: "true", boundary: boundary, to: &body)
         appendField(name: "language", value: configuration.language, boundary: boundary, to: &body)
+        appendField(name: "suppress_nst", value: configuration.suppressNonSpeechTokens ? "true" : "false", boundary: boundary, to: &body)
+
+        if !configuration.initialPrompt.isEmpty {
+            appendField(name: "prompt", value: configuration.initialPrompt, boundary: boundary, to: &body)
+        }
 
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.wav\"\r\n")
@@ -80,6 +85,14 @@ public struct WhisperServerClient: Sendable {
         body.append("--\(boundary)\r\n")
         body.append("Content-Disposition: form-data; name=\"\(name)\"\r\n\r\n")
         body.append("\(value)\r\n")
+    }
+
+    private func format(_ value: Double) -> String {
+        if value.rounded() == value {
+            return String(Int(value))
+        }
+
+        return String(value)
     }
 }
 
