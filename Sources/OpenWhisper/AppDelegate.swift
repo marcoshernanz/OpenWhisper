@@ -6,10 +6,13 @@ import OpenWhisperCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private static let lastTranscriptDefaultsKey = "LastTranscript"
+
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let audioRecorder = AudioRecorder()
     private let audioConverter = AudioConverter()
     private let dictationOverlay = DictationOverlayWindowController()
+    private var manualPasteHotKeyMonitor: ManualPasteHotKeyMonitor?
     private lazy var whisperConfiguration = WhisperConfiguration.resolved(bundleURL: Bundle.main.bundleURL)
     private lazy var transcriber = WhisperTranscriber(
         configuration: whisperConfiguration
@@ -22,13 +25,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isWarmingUp = false
     private var isTerminating = false
     private var transcriptionQueue: [URL] = []
+    private var lastTranscript: String?
+    private var pasteLastTranscriptMenuItem: NSMenuItem?
     private var accessibilityPromptShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
+        restoreLastTranscript()
         warmUpTranscriberIfPossible()
         requestMicrophoneAccess()
         startFnMonitor()
+        startManualPasteHotKey()
         showSetupWindowIfNeeded()
     }
 
@@ -63,6 +70,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: #selector(openSetupInstructions),
             keyEquivalent: ""
         ))
+        let pasteLastTranscriptMenuItem = NSMenuItem(
+            title: "Paste Last Transcript",
+            action: #selector(pasteLastTranscript),
+            keyEquivalent: "v"
+        )
+        pasteLastTranscriptMenuItem.keyEquivalentModifierMask = [.command, .control]
+        pasteLastTranscriptMenuItem.isEnabled = false
+        pasteLastTranscriptMenuItem.target = self
+        menu.addItem(pasteLastTranscriptMenuItem)
+        self.pasteLastTranscriptMenuItem = pasteLastTranscriptMenuItem
+        menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(
             title: "Quit",
             action: #selector(quit),
@@ -92,6 +110,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             setStatus(.needsAccessibility)
             showSetupWindow()
+        }
+    }
+
+    private func startManualPasteHotKey() {
+        let monitor = ManualPasteHotKeyMonitor { [weak self] in
+            Task { @MainActor in
+                self?.pasteLastTranscript()
+            }
+        }
+
+        do {
+            try monitor.start()
+            manualPasteHotKeyMonitor = monitor
+        } catch {
+            NSLog("OpenWhisper paste shortcut registration failed: \(error.localizedDescription)")
         }
     }
 
@@ -221,6 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await MainActor.run {
                     self.isTranscribing = false
                     if !transcript.isEmpty {
+                        self.rememberTranscript(transcript)
                         TextInserter.insert(transcript)
                     }
                     self.processNextQueuedRecording()
@@ -275,6 +309,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             setStatus(currentReadyStatus)
         }
+    }
+
+    private func restoreLastTranscript() {
+        guard let transcript = UserDefaults.standard.string(forKey: Self.lastTranscriptDefaultsKey),
+              !transcript.isEmpty
+        else {
+            return
+        }
+
+        rememberTranscript(transcript)
+    }
+
+    private func rememberTranscript(_ transcript: String) {
+        lastTranscript = transcript
+        UserDefaults.standard.set(transcript, forKey: Self.lastTranscriptDefaultsKey)
+        pasteLastTranscriptMenuItem?.isEnabled = true
     }
 
     private func showSetupWindowIfNeeded() {
@@ -338,6 +388,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(readmeURL())
     }
 
+    @objc private func pasteLastTranscript() {
+        guard let transcript = lastTranscript ?? UserDefaults.standard.string(forKey: Self.lastTranscriptDefaultsKey),
+              !transcript.isEmpty
+        else {
+            NSSound.beep()
+            return
+        }
+
+        waitForManualPasteModifiersThenInsert(transcript, attemptsRemaining: 40)
+    }
+
+    private func waitForManualPasteModifiersThenInsert(_ transcript: String, attemptsRemaining: Int) {
+        let flags = CGEventSource.flagsState(.hidSystemState)
+        let modifiersAreStillDown = flags.contains(.maskCommand) || flags.contains(.maskControl)
+
+        guard modifiersAreStillDown, attemptsRemaining > 0 else {
+            TextInserter.insert(transcript)
+            return
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025) { [weak self] in
+            self?.waitForManualPasteModifiersThenInsert(
+                transcript,
+                attemptsRemaining: attemptsRemaining - 1
+            )
+        }
+    }
+
     private func readmeURL() -> URL {
         let bundleURL = Bundle.main.bundleURL
         if bundleURL.pathExtension == "app",
@@ -388,7 +466,7 @@ private enum AppStatus {
     var tooltip: String {
         switch self {
         case .idle:
-            return "Hold fn to dictate. Text is inserted after release."
+            return "Hold fn to dictate. Press ctrl+cmd+V to paste the last transcript."
         case .warmingUp:
             return "Loading the local Whisper model."
         case .recording:
