@@ -17,7 +17,7 @@ enum TextInserter {
     }
 
     private static func sendPasteShortcut() {
-        let source = CGEventSource(stateID: .hidSystemState)
+        let source = CGEventSource(stateID: .privateState)
         let vKey: CGKeyCode = 9
 
         let keyDown = CGEvent(
