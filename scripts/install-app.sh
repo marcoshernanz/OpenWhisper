@@ -9,11 +9,10 @@ CONFIG_FILE="$CONFIG_DIR/config.plist"
 WHISPER_BIN="$ROOT_DIR/Dependencies/whisper.cpp/build/bin/whisper-cli"
 WHISPER_SERVER_BIN="$ROOT_DIR/Dependencies/whisper.cpp/build/bin/whisper-server"
 MODEL_FILE="$ROOT_DIR/Models/ggml-large-v3-turbo.bin"
+HAS_WHISPER_CPP=0
 
-if [[ ! -x "$WHISPER_BIN" || ! -x "$WHISPER_SERVER_BIN" || ! -f "$MODEL_FILE" ]]; then
-  echo "Missing local whisper.cpp executable, server, or model." >&2
-  echo "Run scripts/setup-whisper.sh large-v3-turbo first." >&2
-  exit 1
+if [[ -x "$WHISPER_BIN" && -x "$WHISPER_SERVER_BIN" && -f "$MODEL_FILE" ]]; then
+  HAS_WHISPER_CPP=1
 fi
 
 pkill -x OpenWhisper 2>/dev/null || true
@@ -23,13 +22,19 @@ cp -R "$APP_DIR" "$DESTINATION"
 "$ROOT_DIR/scripts/sign-app.sh" "$DESTINATION"
 
 mkdir -p "$CONFIG_DIR"
-/usr/libexec/PlistBuddy -c "Clear dict" "$CONFIG_FILE" >/dev/null
-/usr/libexec/PlistBuddy -c "Set :whisperExecutable $WHISPER_BIN" "$CONFIG_FILE" 2>/dev/null \
-  || /usr/libexec/PlistBuddy -c "Add :whisperExecutable string $WHISPER_BIN" "$CONFIG_FILE"
-/usr/libexec/PlistBuddy -c "Set :whisperServerExecutable $WHISPER_SERVER_BIN" "$CONFIG_FILE" 2>/dev/null \
-  || /usr/libexec/PlistBuddy -c "Add :whisperServerExecutable string $WHISPER_SERVER_BIN" "$CONFIG_FILE"
-/usr/libexec/PlistBuddy -c "Set :model $MODEL_FILE" "$CONFIG_FILE" 2>/dev/null \
-  || /usr/libexec/PlistBuddy -c "Add :model string $MODEL_FILE" "$CONFIG_FILE"
+/usr/libexec/PlistBuddy -c "Clear dict" "$CONFIG_FILE" >/dev/null 2>&1 || true
+
+if [[ "$HAS_WHISPER_CPP" -eq 1 ]]; then
+  /usr/libexec/PlistBuddy -c "Set :whisperExecutable $WHISPER_BIN" "$CONFIG_FILE" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :whisperExecutable string $WHISPER_BIN" "$CONFIG_FILE"
+  /usr/libexec/PlistBuddy -c "Set :whisperServerExecutable $WHISPER_SERVER_BIN" "$CONFIG_FILE" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :whisperServerExecutable string $WHISPER_SERVER_BIN" "$CONFIG_FILE"
+  /usr/libexec/PlistBuddy -c "Set :model $MODEL_FILE" "$CONFIG_FILE" 2>/dev/null \
+    || /usr/libexec/PlistBuddy -c "Add :model string $MODEL_FILE" "$CONFIG_FILE"
+else
+  echo "whisper.cpp fallback is not installed. OpenWhisper will use WhisperKit by default." >&2
+  echo "Run scripts/setup-whisper.sh large-v3-turbo later if you want the whisper.cpp fallback." >&2
+fi
 
 open "$DESTINATION"
 echo "$DESTINATION"
