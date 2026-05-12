@@ -26,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isTranscribing = false
     private var isWarmingUp = false
     private var isTerminating = false
+    private var functionKeyGesture = FunctionKeyDictationGesture()
+    private var pendingFunctionKeyTapWorkItem: DispatchWorkItem?
     private var transcriptionQueue: [URL] = []
     private var lastTranscript: String?
     private var pasteLastTranscriptMenuItem: NSMenuItem?
@@ -245,11 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let monitor = FnKeyMonitor { [weak self] isDown in
             Task { @MainActor in
-                if isDown {
-                    self?.startDictation()
-                } else {
-                    self?.finishDictation()
-                }
+                self?.handleFunctionKeyChange(isDown: isDown)
             }
         }
 
@@ -319,13 +317,68 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func startDictation() {
-        guard !isRecording else { return }
+    private func handleFunctionKeyChange(isDown: Bool) {
+        let timestamp = currentFunctionKeyTimestamp()
+
+        if isDown {
+            handleFunctionKeyGestureAction(functionKeyGesture.expirePendingTap(at: timestamp))
+            handleFunctionKeyGestureAction(functionKeyGesture.keyDown(at: timestamp))
+        } else {
+            handleFunctionKeyGestureAction(functionKeyGesture.keyUp(at: timestamp))
+        }
+    }
+
+    private func handleFunctionKeyGestureAction(_ action: FunctionKeyDictationGesture.Action) {
+        switch action {
+        case .none:
+            break
+        case .startRecording:
+            cancelPendingFunctionKeyTap()
+            if !startDictation() {
+                functionKeyGesture.cancel()
+            }
+        case .finishRecording:
+            cancelPendingFunctionKeyTap()
+            finishDictation()
+        case .waitForSecondTap(let deadline):
+            schedulePendingFunctionKeyTap(deadline: deadline)
+        case .lockRecording:
+            cancelPendingFunctionKeyTap()
+            refreshActivityStatus()
+        }
+    }
+
+    private func schedulePendingFunctionKeyTap(deadline: TimeInterval) {
+        cancelPendingFunctionKeyTap()
+
+        let delay = max(0, deadline - currentFunctionKeyTimestamp())
+        let workItem = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.handleFunctionKeyGestureAction(
+                self.functionKeyGesture.expirePendingTap(at: self.currentFunctionKeyTimestamp())
+            )
+        }
+        pendingFunctionKeyTapWorkItem = workItem
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: workItem)
+    }
+
+    private func cancelPendingFunctionKeyTap() {
+        pendingFunctionKeyTapWorkItem?.cancel()
+        pendingFunctionKeyTapWorkItem = nil
+    }
+
+    private func currentFunctionKeyTimestamp() -> TimeInterval {
+        ProcessInfo.processInfo.systemUptime
+    }
+
+    @discardableResult
+    private func startDictation() -> Bool {
+        guard !isRecording else { return false }
 
         guard AXIsProcessTrusted() else {
             setStatus(.needsAccessibility)
             showSetupWindow()
-            return
+            return false
         }
 
         dictationOverlay.show()
@@ -340,6 +393,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             isRecording = true
             refreshActivityStatus()
+            return true
         } catch {
             dictationOverlay.hide()
             setStatus(.error)
@@ -351,6 +405,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     message: error.localizedDescription
                 )
             }
+            return false
         }
     }
 
@@ -695,11 +750,11 @@ private enum AppStatus {
     var tooltip: String {
         switch self {
         case .idle:
-            return "Hold fn to dictate. Press ctrl+cmd+V to paste the last transcript."
+            return "Hold fn to dictate, double-press fn to lock recording, or press ctrl+cmd+V to paste the last transcript."
         case .warmingUp:
             return "Loading the local Whisper model."
         case .recording:
-            return "Recording. Release fn to transcribe."
+            return "Recording. Release fn to transcribe, or press fn again after double-tap to stop."
         case .transcribing:
             return "Transcribing locally."
         case .needsAccessibility:
