@@ -1,6 +1,6 @@
 # OpenWhisper
 
-OpenWhisper is a local-only macOS dictation app. Hold the `fn`/Globe key to record, release it to transcribe locally with WhisperKit by default, and the final text is pasted into the focused app only after release.
+OpenWhisper is a local-only macOS dictation app. Hold the `fn`/Globe key to record, or double-press `fn` to lock recording until the next `fn` press. Audio transcribes locally with WhisperKit by default, and the final text is pasted into the focused app only after recording stops.
 
 ## Requirements
 
@@ -17,12 +17,12 @@ scripts/install-app.sh
 
 This installs and opens `/Applications/OpenWhisper.app`. On first launch, OpenWhisper shows a setup window for:
 
-- Microphone permission, so OpenWhisper can record while `fn` is held.
+- Microphone permission, so OpenWhisper can record while `fn` is held or double-tap locked.
 - Accessibility permission, so OpenWhisper can observe `fn` and paste the result.
 
 macOS does not allow apps to grant Accessibility permission automatically. Use OpenWhisper's setup window to open the right System Settings pane, enable `OpenWhisper`, then relaunch OpenWhisper from the setup window.
 
-Then focus any text field, hold `fn`, speak, and release `fn`. No dictation text is inserted while the key is held.
+Then focus any text field, hold `fn`, speak, and release `fn`. You can also double-press `fn` to keep recording hands-free, then press `fn` once more to stop. No dictation text is inserted while recording is active.
 
 OpenWhisper downloads Argmax's Core ML WhisperKit model on first use and warms it in the background. The first launch can take a few minutes while the model downloads and Core ML specializes it for your Mac; after that, releasing `fn` should insert text much faster because OpenWhisper keeps the local model path warm.
 
@@ -79,7 +79,7 @@ The local server listens on `127.0.0.1:58442` by default when the whisper.cpp en
 
 ## Local-Only Behavior
 
-Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` is held, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after release, then the temporary file is removed.
+Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` recording is active, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after recording stops, then the temporary file is removed.
 
 ## fn Key Notes
 

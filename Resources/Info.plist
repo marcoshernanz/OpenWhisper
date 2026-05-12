@@ -25,6 +25,6 @@
     <key>NSHumanReadableCopyright</key>
     <string>Copyright 2026 OpenWhisper contributors</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>OpenWhisper records microphone audio while you hold fn so it can transcribe locally after release.</string>
+    <string>OpenWhisper records microphone audio while you hold or double-press fn so it can transcribe locally after recording stops.</string>
 </dict>
 </plist>
