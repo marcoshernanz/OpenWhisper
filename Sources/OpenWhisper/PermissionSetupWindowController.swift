@@ -84,7 +84,7 @@ final class PermissionSetupWindowController: NSWindowController {
         titleLabel.font = .boldSystemFont(ofSize: 22)
         titleLabel.alignment = .center
 
-        let bodyLabel = NSTextField(wrappingLabelWithString: "OpenWhisper runs as a menu bar app. It needs Microphone permission to record while you hold fn, and Accessibility permission to detect fn and paste the final transcript.")
+        let bodyLabel = NSTextField(wrappingLabelWithString: "OpenWhisper runs as a menu bar app. It needs Microphone permission to record while you hold or double-press fn, and Accessibility permission to detect fn and paste the final transcript.")
         bodyLabel.alignment = .center
         bodyLabel.textColor = .secondaryLabelColor
 
