@@ -1,6 +1,7 @@
 import Foundation
 
 public enum OpenWhisperDefaultsKey {
+    public static let language = "Language"
     public static let transcriptionEngine = "TranscriptionEngine"
     public static let qualityProfile = "QualityProfile"
     public static let modelOption = "ModelOption"
