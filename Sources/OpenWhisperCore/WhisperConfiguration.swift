@@ -20,7 +20,7 @@ public struct WhisperConfiguration: Sendable, Equatable {
         executableURL: URL,
         serverExecutableURL: URL? = nil,
         modelURL: URL,
-        language: String = "en",
+        language: String = WhisperConfiguration.defaultLanguage,
         serverHost: String = "127.0.0.1",
         serverPort: Int = 58442,
         serverThreadCount: Int = WhisperConfiguration.defaultServerThreadCount,
@@ -123,7 +123,9 @@ public struct WhisperConfiguration: Sendable, Equatable {
             executableURL: URL(fileURLWithPath: executable),
             serverExecutableURL: URL(fileURLWithPath: serverExecutable),
             modelURL: URL(fileURLWithPath: model),
-            language: environment["OPENWHISPER_LANGUAGE"] ?? "en",
+            language: environment["OPENWHISPER_LANGUAGE"]
+                ?? defaults.string(forKey: OpenWhisperDefaultsKey.language)
+                ?? defaultLanguage,
             serverHost: environment["OPENWHISPER_SERVER_HOST"] ?? "127.0.0.1",
             serverPort: Int(environment["OPENWHISPER_SERVER_PORT"] ?? "") ?? 58442,
             serverThreadCount: Int(environment["OPENWHISPER_THREADS"] ?? "")
@@ -139,6 +141,7 @@ public struct WhisperConfiguration: Sendable, Equatable {
     }
 
     public static let defaultWhisperKitModel = "openai_whisper-large-v3-v20240930_626MB"
+    public static let defaultLanguage = TranscriptionLanguage.auto.rawValue
 
     public static var defaultWhisperKitModelDirectory: URL {
         appSupportDirectory().appendingPathComponent("WhisperKit")
@@ -206,6 +209,10 @@ public struct WhisperConfiguration: Sendable, Equatable {
 
     public var suppressNonSpeechTokens: Bool {
         qualityProfile.suppressNonSpeechTokens
+    }
+
+    public var usesAutomaticLanguageDetection: Bool {
+        language == TranscriptionLanguage.auto.rawValue
     }
 
     private static func inferRepoRoot(bundleURL: URL, currentDirectoryURL: URL) -> URL {
