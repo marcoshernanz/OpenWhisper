@@ -26,11 +26,12 @@ Then focus any text field, hold `fn`, speak, and release `fn`. You can also doub
 
 OpenWhisper downloads Argmax's Core ML WhisperKit model on first use and warms it in the background. The first launch can take a few minutes while the model downloads and Core ML specializes it for your Mac; after that, releasing `fn` should insert text much faster because OpenWhisper keeps the local model path warm.
 
-English is the default recognition language because automatic language detection adds latency to short dictations. Set `OPENWHISPER_LANGUAGE=auto` if you need multilingual detection and can accept the extra latency.
+Automatic language detection is the default so English and Spanish dictation stay in the language you spoke. If you mostly dictate in English and want the lowest latency, choose English from the Language menu or set `OPENWHISPER_LANGUAGE=en`.
 
 Use the menu bar app to choose:
 
 - Engine: WhisperKit or whisper.cpp. WhisperKit is the default local engine because it uses Apple Silicon/Core ML and downloads Argmax's recommended `openai_whisper-large-v3-v20240930_626MB` model on first use. whisper.cpp remains available as a fallback.
+- Language: English, Spanish, or Auto Detect. Auto Detect is the default bilingual-friendly mode; English remains available as the primary fixed-language mode for fastest short dictations.
 - Quality: Fast, Balanced, or Accurate. Balanced is the default because it keeps `large-v3-turbo` fast while using full audio context and a small decoding search for better dictation quality. Fast keeps the lowest-latency short audio context; Accurate increases decoding search further.
 - Model: Large v3 Turbo, Large v3, Distil Large v3, Medium English, Small English, Base English, or Tiny English. Models marked "Download Required" are not on disk yet; install them with `scripts/setup-whisper.sh <model>`.
 - Cleanup: Off, Light, or Dictation. Cleanup runs locally after transcription and before the one final paste.
@@ -57,7 +58,7 @@ Override those paths when launching from a shell:
 OPENWHISPER_WHISPER_BIN=/path/to/whisper-cli \
 OPENWHISPER_SERVER_BIN=/path/to/whisper-server \
 OPENWHISPER_MODEL=/path/to/ggml-large-v3-turbo.bin \
-OPENWHISPER_LANGUAGE=en \
+OPENWHISPER_LANGUAGE=auto \
 OPENWHISPER_THREADS=8 \
 OPENWHISPER_ENGINE=whisperKit \
 OPENWHISPER_WHISPERKIT_MODEL=openai_whisper-large-v3-v20240930_626MB \
@@ -75,7 +76,7 @@ scripts/setup-whisper.sh distil-large-v3
 scripts/setup-whisper.sh medium.en
 ```
 
-The local server listens on `127.0.0.1:58442` by default when the whisper.cpp engine is selected. Override it with `OPENWHISPER_SERVER_HOST` and `OPENWHISPER_SERVER_PORT` if that port is already in use. `OPENWHISPER_THREADS` defaults to a conservative value based on your CPU core count. `OPENWHISPER_ENGINE=whisperKit|whisperCpp`, `OPENWHISPER_WHISPERKIT_MODEL=openai_whisper-large-v3-v20240930_626MB`, `OPENWHISPER_QUALITY=fast|balanced|accurate`, `OPENWHISPER_MODEL_OPTION=large-v3-turbo|large-v3|distil-large-v3|medium.en|small.en|base.en|tiny.en`, and `OPENWHISPER_CLEANUP=off|light|dictation` override the menu settings for development. The default local path is WhisperKit; whisper.cpp uses `large-v3-turbo` as its best installed quality/speed fallback.
+The local server listens on `127.0.0.1:58442` by default when the whisper.cpp engine is selected. Override it with `OPENWHISPER_SERVER_HOST` and `OPENWHISPER_SERVER_PORT` if that port is already in use. `OPENWHISPER_THREADS` defaults to a conservative value based on your CPU core count. `OPENWHISPER_ENGINE=whisperKit|whisperCpp`, `OPENWHISPER_LANGUAGE=auto|en|es`, `OPENWHISPER_WHISPERKIT_MODEL=openai_whisper-large-v3-v20240930_626MB`, `OPENWHISPER_QUALITY=fast|balanced|accurate`, `OPENWHISPER_MODEL_OPTION=large-v3-turbo|large-v3|distil-large-v3|medium.en|small.en|base.en|tiny.en`, and `OPENWHISPER_CLEANUP=off|light|dictation` override the menu settings for development. The default local path is WhisperKit; whisper.cpp uses `large-v3-turbo` as its best installed quality/speed fallback.
 
 ## Local-Only Behavior
 

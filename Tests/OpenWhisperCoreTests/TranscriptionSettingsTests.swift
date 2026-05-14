@@ -12,6 +12,26 @@ import Testing
     #expect(TranscriptionQualityProfile.accurate.bestOf == 5)
 }
 
+@Test func exposesLanguageModesForBilingualDictation() {
+    #expect(TranscriptionLanguage.english.rawValue == "en")
+    #expect(TranscriptionLanguage.spanish.rawValue == "es")
+    #expect(TranscriptionLanguage.auto.rawValue == "auto")
+    #expect(WhisperConfiguration.defaultLanguage == TranscriptionLanguage.auto.rawValue)
+
+    let autoConfiguration = WhisperConfiguration(
+        executableURL: URL(fileURLWithPath: "/tmp/whisper-cli"),
+        modelURL: URL(fileURLWithPath: "/tmp/model.bin")
+    )
+    let englishConfiguration = WhisperConfiguration(
+        executableURL: URL(fileURLWithPath: "/tmp/whisper-cli"),
+        modelURL: URL(fileURLWithPath: "/tmp/model.bin"),
+        language: TranscriptionLanguage.english.rawValue
+    )
+
+    #expect(autoConfiguration.usesAutomaticLanguageDetection)
+    #expect(!englishConfiguration.usesAutomaticLanguageDetection)
+}
+
 @Test func exposesModelOptionsAndExpectedFilenames() {
     #expect(WhisperModelOption.largeV3Turbo.fileName == "ggml-large-v3-turbo.bin")
     #expect(WhisperModelOption.largeV3.fileName == "ggml-large-v3.bin")
@@ -49,6 +69,7 @@ import Testing
         bundleURL: temporaryRoot,
         currentDirectoryURL: temporaryRoot,
         environment: [
+            "OPENWHISPER_LANGUAGE": TranscriptionLanguage.spanish.rawValue,
             "OPENWHISPER_MODEL_OPTION": WhisperModelOption.distilLargeV3.rawValue,
             "OPENWHISPER_QUALITY": TranscriptionQualityProfile.accurate.rawValue,
             "OPENWHISPER_CLEANUP": TranscriptCleanupMode.light.rawValue
@@ -56,6 +77,7 @@ import Testing
     )
 
     #expect(configuration.modelURL.lastPathComponent == WhisperModelOption.distilLargeV3.fileName)
+    #expect(configuration.language == TranscriptionLanguage.spanish.rawValue)
     #expect(configuration.modelOption == .distilLargeV3)
     #expect(configuration.transcriptionEngine == .whisperKit)
     #expect(configuration.qualityProfile == .accurate)

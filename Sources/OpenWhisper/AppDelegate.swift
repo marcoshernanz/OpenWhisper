@@ -18,6 +18,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var fnMonitor: FnKeyMonitor?
     private var setupWindowController: PermissionSetupWindowController?
     private var engineMenuItems: [NSMenuItem] = []
+    private var languageMenuItems: [NSMenuItem] = []
     private var qualityMenuItems: [NSMenuItem] = []
     private var modelMenuItems: [NSMenuItem] = []
     private var cleanupMenuItems: [NSMenuItem] = []
@@ -116,6 +117,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(engineMenuItem)
         menu.setSubmenu(engineMenu, for: engineMenuItem)
 
+        let languageMenuItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
+        let languageMenu = NSMenu()
+        languageMenuItems = TranscriptionLanguage.allCases.map { language in
+            let item = NSMenuItem(
+                title: language.displayName,
+                action: #selector(selectLanguage(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = language.rawValue
+            languageMenu.addItem(item)
+            return item
+        }
+        menu.addItem(languageMenuItem)
+        menu.setSubmenu(languageMenu, for: languageMenuItem)
+
         let qualityMenuItem = NSMenuItem(title: "Quality", action: nil, keyEquivalent: "")
         let qualityMenu = NSMenu()
         qualityMenuItems = TranscriptionQualityProfile.allCases.map { profile in
@@ -210,6 +227,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for item in engineMenuItems {
             let engine = LocalTranscriptionEngine(rawValue: item.representedObject as? String ?? "")
             item.state = engine == whisperConfiguration.transcriptionEngine ? .on : .off
+        }
+
+        for item in languageMenuItems {
+            let language = TranscriptionLanguage(rawValue: item.representedObject as? String ?? "")
+            item.state = language?.rawValue == whisperConfiguration.language ? .on : .off
         }
 
         for item in qualityMenuItems {
@@ -623,6 +645,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         UserDefaults.standard.set(rawValue, forKey: OpenWhisperDefaultsKey.transcriptionEngine)
+        configureTranscriberFromSettings()
+    }
+
+    @objc private func selectLanguage(_ sender: NSMenuItem) {
+        guard let rawValue = sender.representedObject as? String,
+              TranscriptionLanguage(rawValue: rawValue) != nil
+        else {
+            return
+        }
+
+        UserDefaults.standard.set(rawValue, forKey: OpenWhisperDefaultsKey.language)
         configureTranscriberFromSettings()
     }
 

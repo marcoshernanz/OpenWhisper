@@ -29,9 +29,11 @@ public actor WhisperKitTranscriber {
     private var decodingOptions: DecodingOptions {
         DecodingOptions(
             verbose: false,
-            language: configuration.language == "auto" ? nil : configuration.language,
+            task: .transcribe,
+            language: configuration.usesAutomaticLanguageDetection ? nil : configuration.language,
             temperature: Float(configuration.temperature),
             temperatureIncrementOnFallback: Float(configuration.temperatureIncrement),
+            detectLanguage: configuration.usesAutomaticLanguageDetection,
             skipSpecialTokens: true,
             withoutTimestamps: true,
             chunkingStrategy: .vad
