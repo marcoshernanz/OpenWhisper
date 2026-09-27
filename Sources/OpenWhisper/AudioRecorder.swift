@@ -1,64 +1,159 @@
 @preconcurrency import AVFoundation
 import Foundation
+import OpenWhisperCore
 
+@MainActor
 final class AudioRecorder {
-    private let engine = AVAudioEngine()
-    private var wavWriter: WhisperWavFileWriter?
-    private var recordingURL: URL?
+    private var engine: AVAudioEngine?
+    private var engineConfigurationObserver: NSObjectProtocol?
+    private var activeRecording: ActiveRecording?
 
-    func start(levelHandler: ((Float) -> Void)? = nil) throws {
+    func start(levelHandler: (@Sendable (Float) -> Void)? = nil) throws {
         guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
             throw RecordingError.microphonePermissionRequired
         }
 
-        let inputNode = engine.inputNode
-        let format = inputNode.outputFormat(forBus: 0)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("openwhisper-\(UUID().uuidString).wav")
-        let writer = try WhisperWavFileWriter(
-            url: url,
-            sourceSampleRate: format.sampleRate
-        )
-
-        wavWriter = writer
-        recordingURL = url
-
-        inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: format) { buffer, _ in
-            writer.append(buffer)
-
-            if let levelHandler {
-                levelHandler(Self.normalizedLevel(from: buffer))
-            }
-        }
+        let writer = try WhisperWavFileWriter(url: url)
+        let tapBlock = Self.makeTapBlock(writer: writer, levelHandler: levelHandler)
 
         do {
-            engine.prepare()
-            try engine.start()
+            try startCapture(tapBlock: tapBlock)
         } catch {
-            inputNode.removeTap(onBus: 0)
             writer.cancel()
-            wavWriter = nil
-            recordingURL = nil
             throw error
         }
+
+        activeRecording = ActiveRecording(url: url, writer: writer, tapBlock: tapBlock)
     }
 
     func stop() throws -> URL {
-        engine.inputNode.removeTap(onBus: 0)
-        engine.stop()
-        try wavWriter?.finish()
-        wavWriter = nil
+        stopCapture()
 
-        guard let url = recordingURL else {
+        guard let recording = activeRecording else {
             throw RecordingError.noRecording
         }
 
-        recordingURL = nil
-        return url
+        activeRecording = nil
+        try recording.writer.finish()
+        return recording.url
     }
 
-    private static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Float {
+    /// Retries once on a new engine, because an engine that has not caught up with an input change
+    /// (such as AirPods connecting) cannot install its tap.
+    private func startCapture(tapBlock: @escaping AVAudioNodeTapBlock) throws {
+        do {
+            try startEngine(tapBlock: tapBlock)
+        } catch {
+            NSLog("OpenWhisper audio engine failed to start, retrying with a new engine: \(error.localizedDescription)")
+            discardEngine()
+
+            do {
+                try startEngine(tapBlock: tapBlock)
+            } catch {
+                discardEngine()
+                throw error
+            }
+        }
+    }
+
+    private func startEngine(tapBlock: @escaping AVAudioNodeTapBlock) throws {
+        let engine = currentEngine()
+
+        try ObjCException.catching {
+            let inputNode = engine.inputNode
+            let format = inputNode.outputFormat(forBus: 0)
+            guard format.sampleRate > 0, format.channelCount > 0 else {
+                throw RecordingError.inputUnavailable
+            }
+
+            inputNode.removeTap(onBus: 0)
+            inputNode.installTap(onBus: 0, bufferSize: 4096, format: format, block: tapBlock)
+            engine.prepare()
+            try engine.start()
+        }
+    }
+
+    private func stopCapture() {
+        guard let engine else { return }
+
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+    }
+
+    private func currentEngine() -> AVAudioEngine {
+        if let engine, Self.inputFormatMatchesHardware(engine.inputNode) {
+            return engine
+        }
+
+        discardEngine()
+
+        let engine = AVAudioEngine()
+        let engineID = ObjectIdentifier(engine)
+        engineConfigurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange,
+            object: engine,
+            queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.engineConfigurationChanged(engineID: engineID)
+            }
+        }
+        self.engine = engine
+        return engine
+    }
+
+    private func discardEngine() {
+        stopCapture()
+
+        if let engineConfigurationObserver {
+            NotificationCenter.default.removeObserver(engineConfigurationObserver)
+        }
+        engineConfigurationObserver = nil
+        engine = nil
+    }
+
+    /// AVAudioEngine stops itself when the input device changes, for example when AirPods connect and
+    /// become the default input, and then keeps reporting the previous device's format. Replace it,
+    /// and keep recording on the new input if dictation is in progress.
+    private func engineConfigurationChanged(engineID: ObjectIdentifier) {
+        guard let engine, ObjectIdentifier(engine) == engineID else { return }
+
+        discardEngine()
+
+        guard let activeRecording else { return }
+
+        do {
+            try startCapture(tapBlock: activeRecording.tapBlock)
+            NSLog("OpenWhisper resumed recording after an audio input change.")
+        } catch {
+            NSLog("OpenWhisper could not resume recording after an audio input change: \(error.localizedDescription)")
+        }
+    }
+
+    private static func inputFormatMatchesHardware(_ inputNode: AVAudioInputNode) -> Bool {
+        let hardwareFormat = inputNode.inputFormat(forBus: 0)
+        let tapFormat = inputNode.outputFormat(forBus: 0)
+
+        return hardwareFormat.sampleRate == tapFormat.sampleRate
+            && hardwareFormat.channelCount == tapFormat.channelCount
+    }
+
+    private nonisolated static func makeTapBlock(
+        writer: WhisperWavFileWriter,
+        levelHandler: (@Sendable (Float) -> Void)?
+    ) -> AVAudioNodeTapBlock {
+        { buffer, _ in
+            writer.append(buffer)
+
+            if let levelHandler {
+                levelHandler(normalizedLevel(from: buffer))
+            }
+        }
+    }
+
+    private nonisolated static func normalizedLevel(from buffer: AVAudioPCMBuffer) -> Float {
         guard let channelData = buffer.floatChannelData else { return 0 }
 
         let channelCount = min(Int(buffer.format.channelCount), 2)
@@ -89,38 +184,44 @@ final class AudioRecorder {
     }
 }
 
-private final class WhisperWavFileWriter: @unchecked Sendable {
-    private static let outputSampleRate: Double = 16_000
+private struct ActiveRecording {
+    let url: URL
+    let writer: WhisperWavFileWriter
+    let tapBlock: AVAudioNodeTapBlock
+}
 
+private final class WhisperWavFileWriter: @unchecked Sendable {
     private let url: URL
     private let fileHandle: FileHandle
     private let writeQueue = DispatchQueue(label: "dev.openwhisper.wav-writer")
-    private let sourceSampleRate: Double
-    private let resampleStep: Double
-    private var pendingInput: [Float] = []
-    private var resamplePosition: Double = 0
+    private var resampler = WhisperPCMResampler()
     private var dataByteCount: UInt32 = 0
     private var isClosed = false
 
-    init(url: URL, sourceSampleRate: Double) throws {
+    init(url: URL) throws {
         self.url = url
-        self.sourceSampleRate = sourceSampleRate
-        self.resampleStep = sourceSampleRate / Self.outputSampleRate
 
         FileManager.default.createFile(atPath: url.path, contents: nil)
         self.fileHandle = try FileHandle(forWritingTo: url)
         try fileHandle.write(contentsOf: Self.header(dataByteCount: 0))
     }
 
+    /// Called on the audio tap thread. Resampling happens on `writeQueue`, so the tap of an engine
+    /// rebuilt after an input change never races the previous engine's tap.
     func append(_ buffer: AVAudioPCMBuffer) {
-        guard let pcm = makePCMData(from: buffer), !pcm.isEmpty else { return }
+        guard let samples = Self.monoSamples(from: buffer) else { return }
+        let sampleRate = buffer.format.sampleRate
 
         writeQueue.async { [fileHandle] in
             guard !self.isClosed else { return }
 
+            let pcm = self.resampler.resample(samples, sourceSampleRate: sampleRate)
+            guard !pcm.isEmpty else { return }
+
             do {
-                try fileHandle.write(contentsOf: pcm)
-                self.dataByteCount += UInt32(pcm.count)
+                let data = pcm.map(\.littleEndian).withUnsafeBufferPointer { Data(buffer: $0) }
+                try fileHandle.write(contentsOf: data)
+                self.dataByteCount += UInt32(data.count)
             } catch {
                 NSLog("OpenWhisper audio write failed: \(error.localizedDescription)")
             }
@@ -158,7 +259,7 @@ private final class WhisperWavFileWriter: @unchecked Sendable {
         }
     }
 
-    private func makePCMData(from buffer: AVAudioPCMBuffer) -> Data? {
+    private static func monoSamples(from buffer: AVAudioPCMBuffer) -> [Float]? {
         guard let channelData = buffer.floatChannelData else {
             NSLog("OpenWhisper received unsupported microphone sample format.")
             return nil
@@ -168,7 +269,7 @@ private final class WhisperWavFileWriter: @unchecked Sendable {
         let frameCount = Int(buffer.frameLength)
         guard channelCount > 0, frameCount > 0 else { return nil }
 
-        pendingInput.reserveCapacity(pendingInput.count + frameCount)
+        var samples = [Float](repeating: 0, count: frameCount)
 
         for frame in 0..<frameCount {
             var sample: Float = 0
@@ -177,39 +278,14 @@ private final class WhisperWavFileWriter: @unchecked Sendable {
                 sample += channelData[channel][frame]
             }
 
-            pendingInput.append(sample / Float(channelCount))
+            samples[frame] = sample / Float(channelCount)
         }
 
-        return resampledPCMData()
-    }
-
-    private func resampledPCMData() -> Data {
-        var data = Data()
-        let expectedOutputFrames = Int(Double(pendingInput.count) / resampleStep) + 1
-        data.reserveCapacity(expectedOutputFrames * 2)
-
-        while resamplePosition + 1 < Double(pendingInput.count) {
-            let lowerIndex = Int(resamplePosition)
-            let fraction = Float(resamplePosition - Double(lowerIndex))
-            let lower = pendingInput[lowerIndex]
-            let upper = pendingInput[lowerIndex + 1]
-            let sample = lower + ((upper - lower) * fraction)
-            let clamped = max(-1, min(1, sample))
-            let intSample = Int16(clamped * Float(Int16.max))
-            data.appendLittleEndian(intSample)
-            resamplePosition += resampleStep
-        }
-
-        let removableSamples = Int(resamplePosition)
-        if removableSamples > 0 {
-            pendingInput.removeFirst(removableSamples)
-            resamplePosition -= Double(removableSamples)
-        }
-
-        return data
+        return samples
     }
 
     private static func header(dataByteCount: UInt32) -> Data {
+        let outputSampleRate = WhisperPCMResampler.outputSampleRate
         var data = Data()
         let riffByteCount = 36 + dataByteCount
 
@@ -220,8 +296,8 @@ private final class WhisperWavFileWriter: @unchecked Sendable {
         data.appendLittleEndian(UInt32(16))
         data.appendLittleEndian(UInt16(1))
         data.appendLittleEndian(UInt16(1))
-        data.appendLittleEndian(UInt32(Self.outputSampleRate))
-        data.appendLittleEndian(UInt32(Self.outputSampleRate * 2))
+        data.appendLittleEndian(UInt32(outputSampleRate))
+        data.appendLittleEndian(UInt32(outputSampleRate * 2))
         data.appendLittleEndian(UInt16(2))
         data.appendLittleEndian(UInt16(16))
         data.appendASCII("data")
@@ -245,16 +321,12 @@ private extension Data {
         var littleEndian = value.littleEndian
         append(contentsOf: Swift.withUnsafeBytes(of: &littleEndian) { Array($0) })
     }
-
-    mutating func appendLittleEndian(_ value: Int16) {
-        var littleEndian = value.littleEndian
-        append(contentsOf: Swift.withUnsafeBytes(of: &littleEndian) { Array($0) })
-    }
 }
 
 enum RecordingError: Error, LocalizedError {
     case microphonePermissionRequired
     case noRecording
+    case inputUnavailable
     case unsupportedAudioFormat
 
     var errorDescription: String? {
@@ -263,6 +335,8 @@ enum RecordingError: Error, LocalizedError {
             return "Microphone permission is required before recording."
         case .noRecording:
             return "No recording is available."
+        case .inputUnavailable:
+            return "No microphone input is available right now. If headphones just connected or disconnected, try again in a moment."
         case .unsupportedAudioFormat:
             return "The microphone audio format could not be converted for local transcription."
         }
