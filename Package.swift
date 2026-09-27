@@ -21,13 +21,20 @@ let package = Package(
                 .product(name: "WhisperKit", package: "argmax-oss-swift")
             ]
         ),
+        .target(
+            name: "OpenWhisperObjC"
+        ),
         .executableTarget(
             name: "OpenWhisper",
-            dependencies: ["OpenWhisperCore"]
+            dependencies: ["OpenWhisperCore", "OpenWhisperObjC"]
         ),
         .testTarget(
             name: "OpenWhisperCoreTests",
             dependencies: ["OpenWhisperCore"]
+        ),
+        .testTarget(
+            name: "OpenWhisperObjCTests",
+            dependencies: ["OpenWhisperObjC"]
         )
     ]
 )
