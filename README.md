@@ -86,6 +86,10 @@ Runtime dictation does not use network services after the local model is downloa
 
 The `fn`/Globe key is exposed by macOS as a function modifier flag. If macOS built-in dictation or Globe-key shortcuts are configured to use the same key, disable or remap those shortcuts in System Settings before using OpenWhisper.
 
+## Audio Input Notes
+
+OpenWhisper records from the macOS default input device. When that changes, for example when AirPods connect and become the default microphone, OpenWhisper rebuilds its audio engine for the new device, including in the middle of a dictation.
+
 ## Build an App Bundle
 
 ```sh
