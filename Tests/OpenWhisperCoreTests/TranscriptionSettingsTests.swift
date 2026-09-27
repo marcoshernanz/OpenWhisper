@@ -48,6 +48,14 @@ import Testing
     #expect(cleaner.clean("  hello   world  ", mode: .off) == "hello world")
 }
 
+@Test func dictationCleanupKeepsURLsAndAbbreviationsIntact() {
+    let cleaner = LocalTranscriptCleaner()
+
+    #expect(cleaner.clean("check developer.apple.com for it", mode: .dictation) == "Check developer.apple.com for it.")
+    #expect(cleaner.clean("use e.g. the README.md file", mode: .dictation) == "Use e.g. the README.md file.")
+    #expect(cleaner.clean("Ah, vale. Um, entendido", mode: .dictation) == "Ah, vale. Entendido.")
+}
+
 @Test func resolvesSelectedModelFromEnvironment() {
     let temporaryRoot = FileManager.default.temporaryDirectory
         .appendingPathComponent("openwhisper-tests-\(UUID().uuidString)")

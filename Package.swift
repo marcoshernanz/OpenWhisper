@@ -12,7 +12,7 @@ let package = Package(
         .library(name: "OpenWhisperCore", targets: ["OpenWhisperCore"])
     ],
     dependencies: [
-        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "0.9.0")
+        .package(url: "https://github.com/argmaxinc/argmax-oss-swift.git", from: "1.1.0")
     ],
     targets: [
         .target(
