@@ -78,6 +78,16 @@ scripts/setup-whisper.sh medium.en
 
 The local server listens on `127.0.0.1:58442` by default when the whisper.cpp engine is selected. Override it with `OPENWHISPER_SERVER_HOST` and `OPENWHISPER_SERVER_PORT` if that port is already in use. `OPENWHISPER_THREADS` defaults to a conservative value based on your CPU core count. `OPENWHISPER_ENGINE=whisperKit|whisperCpp`, `OPENWHISPER_LANGUAGE=auto|en|es`, `OPENWHISPER_WHISPERKIT_MODEL=openai_whisper-large-v3-v20240930_626MB`, `OPENWHISPER_QUALITY=fast|balanced|accurate`, `OPENWHISPER_MODEL_OPTION=large-v3-turbo|large-v3|distil-large-v3|medium.en|small.en|base.en|tiny.en`, and `OPENWHISPER_CLEANUP=off|light|dictation` override the menu settings for development. The default local path is WhisperKit; whisper.cpp uses `large-v3-turbo` as its best installed quality/speed fallback.
 
+## Custom Vocabulary
+
+Whisper can misspell names and technical terms, especially inside Spanish sentences. List the ones you use so it spells them the way you do:
+
+```sh
+defaults write dev.openwhisper.OpenWhisper InitialPrompt "GitHub, AirPods, OpenWhisper, WhisperKit, pull request."
+```
+
+Restart OpenWhisper after changing it. Keep the list short: Whisper only reads the last 224 tokens (roughly 150 words), and a long or off-topic list can nudge unrelated words. `OPENWHISPER_PROMPT` overrides it for development. Remove it with `defaults delete dev.openwhisper.OpenWhisper InitialPrompt`.
+
 ## Local-Only Behavior
 
 Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` recording is active, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after recording stops, then the temporary file is removed.
