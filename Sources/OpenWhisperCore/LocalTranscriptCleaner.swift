@@ -55,22 +55,31 @@ public struct LocalTranscriptCleaner: Sendable {
     }
 
     private func removeStandaloneFillers(from text: String) -> String {
-        let words = text.split(separator: " ", omittingEmptySubsequences: true)
-        let filtered = words.filter { word in
+        var kept: [String] = []
+        var capitalizeNextWord = false
+
+        for word in text.split(separator: " ", omittingEmptySubsequences: true) {
             let normalized = word
                 .trimmingCharacters(in: .punctuationCharacters)
                 .lowercased()
 
-            return !["um", "uh", "erm", "ah"].contains(normalized)
+            if ["um", "uh", "erm"].contains(normalized) {
+                // "It works. Um, next" should become "It works. Next".
+                capitalizeNextWord = capitalizeNextWord || word.first?.isUppercase == true
+                continue
+            }
+
+            kept.append(capitalizeNextWord ? word.prefix(1).uppercased() + word.dropFirst() : String(word))
+            capitalizeNextWord = false
         }
 
-        return filtered.joined(separator: " ")
+        return kept.joined(separator: " ")
     }
 
     private func finalizeDictation(_ text: String) -> String {
         guard !text.isEmpty else { return text }
 
-        var result = capitalizeSentenceStarts(text)
+        var result = capitalizeFirstLetter(text)
         if let last = result.unicodeScalars.last,
            CharacterSet.alphanumerics.contains(last) {
             result.append(".")
@@ -79,26 +88,11 @@ public struct LocalTranscriptCleaner: Sendable {
         return result
     }
 
-    private func capitalizeSentenceStarts(_ text: String) -> String {
-        var result = ""
-        var shouldCapitalize = true
+    /// Whisper already capitalizes its sentences. Only the first letter needs fixing, and treating
+    /// every "." as a sentence end would turn "developer.apple.com" into "developer.Apple.Com".
+    private func capitalizeFirstLetter(_ text: String) -> String {
+        guard let index = text.firstIndex(where: \.isLetter) else { return text }
 
-        for character in text {
-            if shouldCapitalize, character.isLetter {
-                result.append(String(character).uppercased())
-                shouldCapitalize = false
-            } else {
-                result.append(character)
-                if character.isLetter || character.isNumber {
-                    shouldCapitalize = false
-                }
-            }
-
-            if ".!?".contains(character) {
-                shouldCapitalize = true
-            }
-        }
-
-        return result
+        return text.replacingCharacters(in: index...index, with: text[index].uppercased())
     }
 }
