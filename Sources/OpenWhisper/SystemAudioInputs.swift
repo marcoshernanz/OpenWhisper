@@ -89,7 +89,7 @@ enum SystemAudioInputs {
         return AudioObjectGetPropertyDataSize(deviceID, &address, 0, nil, &size) == noErr && size > 0
     }
 
-    private static func property<Value>(
+    private static func property<Value: BitwiseCopyable>(
         _ selector: AudioObjectPropertySelector,
         of objectID: AudioObjectID,
         default defaultValue: Value

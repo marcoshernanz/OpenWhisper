@@ -5,7 +5,7 @@ import OpenWhisperCore
 @MainActor
 final class AudioRecorder {
     private var engine: AVAudioEngine?
-    private var engineInputDeviceID: AudioDeviceID?
+    private var deviceCapture: AudioDeviceCapture?
     private var engineConfigurationObserver: NSObjectProtocol?
     private var activeRecording: ActiveRecording?
 
@@ -30,7 +30,9 @@ final class AudioRecorder {
     }
 
     func stop() throws -> URL {
-        stopCapture()
+        // Release the microphone entirely. While an engine holds Bluetooth headphones' microphone, even a
+        // stopped one, macOS keeps them in their headset profile and music plays at call quality.
+        discardEngine()
 
         guard let recording = activeRecording else {
             throw RecordingError.noRecording
@@ -44,6 +46,11 @@ final class AudioRecorder {
     /// Retries once on a new engine, because an engine that has not caught up with an input change
     /// (such as AirPods connecting) cannot install its tap.
     private func startCapture(tapBlock: @escaping AVAudioNodeTapBlock) throws {
+        if let deviceID = SystemAudioInputs.preferredInputDeviceID() {
+            deviceCapture = try AudioDeviceCapture(deviceID: deviceID, tapBlock: tapBlock)
+            return
+        }
+
         do {
             try startEngine(tapBlock: tapBlock)
         } catch {
@@ -77,6 +84,9 @@ final class AudioRecorder {
     }
 
     private func stopCapture() {
+        deviceCapture?.stop()
+        deviceCapture = nil
+
         guard let engine else { return }
 
         engine.inputNode.removeTap(onBus: 0)
@@ -84,23 +94,13 @@ final class AudioRecorder {
     }
 
     private func currentEngine() -> AVAudioEngine {
-        let inputDeviceID = SystemAudioInputs.preferredInputDeviceID()
-        if let engine, engineInputDeviceID == inputDeviceID, Self.inputFormatMatchesHardware(engine.inputNode) {
+        if let engine, Self.inputFormatMatchesHardware(engine.inputNode) {
             return engine
         }
 
         discardEngine()
 
         let engine = AVAudioEngine()
-        if let inputDeviceID {
-            do {
-                try engine.inputNode.auAudioUnit.setDeviceID(inputDeviceID)
-                engineInputDeviceID = inputDeviceID
-            } catch {
-                NSLog("OpenWhisper could not select audio input \(inputDeviceID), using the default input: \(error.localizedDescription)")
-            }
-        }
-
         let engineID = ObjectIdentifier(engine)
         engineConfigurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
@@ -123,7 +123,6 @@ final class AudioRecorder {
         }
         engineConfigurationObserver = nil
         engine = nil
-        engineInputDeviceID = nil
     }
 
     /// AVAudioEngine stops itself when the input device changes, for example when AirPods connect and
@@ -131,12 +130,6 @@ final class AudioRecorder {
     /// and keep recording on the new input if dictation is in progress.
     private func engineConfigurationChanged(engineID: ObjectIdentifier) {
         guard let engine, ObjectIdentifier(engine) == engineID else { return }
-
-        // Selecting the input device in `currentEngine()` also posts this notification, shortly after
-        // recording has started, while the engine keeps running on a matching format.
-        if engine.isRunning, Self.inputFormatMatchesHardware(engine.inputNode) {
-            return
-        }
 
         discardEngine()
 
