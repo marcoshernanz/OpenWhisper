@@ -5,6 +5,7 @@ import OpenWhisperCore
 @MainActor
 final class AudioRecorder {
     private var engine: AVAudioEngine?
+    private var deviceCapture: AudioDeviceCapture?
     private var engineConfigurationObserver: NSObjectProtocol?
     private var activeRecording: ActiveRecording?
 
@@ -29,7 +30,9 @@ final class AudioRecorder {
     }
 
     func stop() throws -> URL {
-        stopCapture()
+        // Release the microphone entirely. While an engine holds Bluetooth headphones' microphone, even a
+        // stopped one, macOS keeps them in their headset profile and music plays at call quality.
+        discardEngine()
 
         guard let recording = activeRecording else {
             throw RecordingError.noRecording
@@ -43,6 +46,11 @@ final class AudioRecorder {
     /// Retries once on a new engine, because an engine that has not caught up with an input change
     /// (such as AirPods connecting) cannot install its tap.
     private func startCapture(tapBlock: @escaping AVAudioNodeTapBlock) throws {
+        if let deviceID = SystemAudioInputs.preferredInputDeviceID() {
+            deviceCapture = try AudioDeviceCapture(deviceID: deviceID, tapBlock: tapBlock)
+            return
+        }
+
         do {
             try startEngine(tapBlock: tapBlock)
         } catch {
@@ -76,6 +84,9 @@ final class AudioRecorder {
     }
 
     private func stopCapture() {
+        deviceCapture?.stop()
+        deviceCapture = nil
+
         guard let engine else { return }
 
         engine.inputNode.removeTap(onBus: 0)

@@ -91,3 +91,32 @@ import Testing
     #expect(configuration.qualityProfile == .accurate)
     #expect(configuration.cleanupMode == .light)
 }
+
+@Test func usesBuiltInMicrophoneOnlyWhileHeadphonesArePlaying() {
+    let airPods = AudioInputDeviceInfo(id: 104, transport: .bluetooth)
+    let builtIn = AudioInputDeviceInfo(id: 78, transport: .builtIn)
+    let usb = AudioInputDeviceInfo(id: 90, transport: .other)
+    let inputs = [airPods, builtIn, usb]
+
+    func preferredInput(
+        _ defaultInput: AudioInputDeviceInfo?,
+        _ availableInputs: [AudioInputDeviceInfo] = inputs,
+        playing: Bool = true,
+        lidClosed: Bool = false
+    ) -> UInt32? {
+        MicrophoneSelection.preferredInputDeviceID(
+            defaultInput: defaultInput,
+            availableInputs: availableInputs,
+            isHeadphoneAudioPlaying: playing,
+            isLidClosed: lidClosed
+        )
+    }
+
+    #expect(preferredInput(airPods) == 78)
+    #expect(preferredInput(airPods, playing: false) == nil)
+    #expect(preferredInput(airPods, lidClosed: true) == nil)
+    #expect(preferredInput(airPods, [airPods]) == nil)
+    #expect(preferredInput(usb) == nil)
+    #expect(preferredInput(builtIn) == nil)
+    #expect(preferredInput(nil) == nil)
+}
