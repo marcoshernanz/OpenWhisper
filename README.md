@@ -100,10 +100,10 @@ The `fn`/Globe key is exposed by macOS as a function modifier flag. If macOS bui
 
 OpenWhisper records from the macOS default input device. When that changes, for example when AirPods connect and become the default microphone, OpenWhisper rebuilds its audio engine for the new device, including in the middle of a dictation.
 
-When the default input is Bluetooth headphones such as AirPods, OpenWhisper records from the Mac's built-in microphone instead. Using the headphones' microphone switches them to their headset profile, which makes music sound worse, cuts playback for about a second when recording starts and stops, and can change their volume. With the lid closed, the built-in microphone cannot hear anything, so OpenWhisper uses the headphones. To always use the default input:
+When the default input is Bluetooth headphones such as AirPods, OpenWhisper uses their microphone unless something is playing through them. Recording from them switches them to their headset profile, which cuts playback for about a second when recording starts and stops and lowers its quality in between, so while audio is playing OpenWhisper records from the Mac's built-in microphone instead. With the lid closed, the built-in microphone cannot hear anything, so OpenWhisper uses the headphones. To always use the default input:
 
 ```sh
-defaults write dev.openwhisper.OpenWhisper PreferBuiltInMicrophone -bool false
+defaults write dev.openwhisper.OpenWhisper UseBuiltInMicrophoneDuringPlayback -bool false
 ```
 
 ## Build an App Bundle

@@ -20,15 +20,16 @@ public enum MicrophoneSelection {
     /// Returns the device to record from, or nil to follow the macOS default input.
     ///
     /// Recording from Bluetooth headphones such as AirPods switches them to their headset profile,
-    /// which lowers playback quality, briefly cuts audio when recording starts and stops, and can
-    /// change their volume. The built-in microphone avoids that, except with the lid closed, when it
-    /// cannot hear anything.
+    /// which cuts playback for about a second when recording starts and stops, and lowers its quality
+    /// in between. That only matters while something is playing through them, so only then does the
+    /// built-in microphone take over. With the lid closed, it cannot hear anything.
     public static func preferredInputDeviceID(
         defaultInput: AudioInputDeviceInfo?,
         availableInputs: [AudioInputDeviceInfo],
+        isHeadphoneAudioPlaying: Bool,
         isLidClosed: Bool
     ) -> UInt32? {
-        guard defaultInput?.transport == .bluetooth, !isLidClosed else {
+        guard defaultInput?.transport == .bluetooth, isHeadphoneAudioPlaying, !isLidClosed else {
             return nil
         }
 

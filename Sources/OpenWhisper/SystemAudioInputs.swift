@@ -6,15 +6,31 @@ import OpenWhisperCore
 enum SystemAudioInputs {
     /// The input device OpenWhisper should record from, or nil for the macOS default input.
     static func preferredInputDeviceID() -> AudioDeviceID? {
-        let prefersBuiltInMicrophone = UserDefaults.standard
-            .object(forKey: OpenWhisperDefaultsKey.preferBuiltInMicrophone) as? Bool ?? true
-        guard prefersBuiltInMicrophone else { return nil }
+        let usesBuiltInMicrophoneDuringPlayback = UserDefaults.standard
+            .object(forKey: OpenWhisperDefaultsKey.useBuiltInMicrophoneDuringPlayback) as? Bool ?? true
+        guard usesBuiltInMicrophoneDuringPlayback else { return nil }
 
         return MicrophoneSelection.preferredInputDeviceID(
             defaultInput: defaultInputDevice(),
             availableInputs: inputDevices(),
+            isHeadphoneAudioPlaying: isBluetoothOutputPlaying(),
             isLidClosed: isLidClosed()
         )
+    }
+
+    /// Whether any app is playing through Bluetooth headphones that are the default output.
+    /// OpenWhisper's own engine is stopped whenever this is checked, so it never counts itself.
+    private static func isBluetoothOutputPlaying() -> Bool {
+        let deviceID: AudioDeviceID = property(
+            kAudioHardwarePropertyDefaultOutputDevice,
+            of: AudioObjectID(kAudioObjectSystemObject),
+            default: kAudioObjectUnknown
+        )
+        guard deviceID != kAudioObjectUnknown, deviceInfo(deviceID).transport == .bluetooth else {
+            return false
+        }
+
+        return property(kAudioDevicePropertyDeviceIsRunningSomewhere, of: deviceID, default: UInt32(0)) != 0
     }
 
     private static func defaultInputDevice() -> AudioInputDeviceInfo? {

@@ -92,16 +92,31 @@ import Testing
     #expect(configuration.cleanupMode == .light)
 }
 
-@Test func prefersBuiltInMicrophoneOverBluetoothHeadphones() {
+@Test func usesBuiltInMicrophoneOnlyWhileHeadphonesArePlaying() {
     let airPods = AudioInputDeviceInfo(id: 104, transport: .bluetooth)
     let builtIn = AudioInputDeviceInfo(id: 78, transport: .builtIn)
     let usb = AudioInputDeviceInfo(id: 90, transport: .other)
     let inputs = [airPods, builtIn, usb]
 
-    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: airPods, availableInputs: inputs, isLidClosed: false) == 78)
-    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: airPods, availableInputs: inputs, isLidClosed: true) == nil)
-    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: airPods, availableInputs: [airPods], isLidClosed: false) == nil)
-    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: usb, availableInputs: inputs, isLidClosed: false) == nil)
-    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: builtIn, availableInputs: inputs, isLidClosed: false) == nil)
-    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: nil, availableInputs: inputs, isLidClosed: false) == nil)
+    func preferredInput(
+        _ defaultInput: AudioInputDeviceInfo?,
+        _ availableInputs: [AudioInputDeviceInfo] = inputs,
+        playing: Bool = true,
+        lidClosed: Bool = false
+    ) -> UInt32? {
+        MicrophoneSelection.preferredInputDeviceID(
+            defaultInput: defaultInput,
+            availableInputs: availableInputs,
+            isHeadphoneAudioPlaying: playing,
+            isLidClosed: lidClosed
+        )
+    }
+
+    #expect(preferredInput(airPods) == 78)
+    #expect(preferredInput(airPods, playing: false) == nil)
+    #expect(preferredInput(airPods, lidClosed: true) == nil)
+    #expect(preferredInput(airPods, [airPods]) == nil)
+    #expect(preferredInput(usb) == nil)
+    #expect(preferredInput(builtIn) == nil)
+    #expect(preferredInput(nil) == nil)
 }
