@@ -5,6 +5,7 @@ import OpenWhisperCore
 @MainActor
 final class AudioRecorder {
     private var engine: AVAudioEngine?
+    private var engineInputDeviceID: AudioDeviceID?
     private var engineConfigurationObserver: NSObjectProtocol?
     private var activeRecording: ActiveRecording?
 
@@ -83,13 +84,23 @@ final class AudioRecorder {
     }
 
     private func currentEngine() -> AVAudioEngine {
-        if let engine, Self.inputFormatMatchesHardware(engine.inputNode) {
+        let inputDeviceID = SystemAudioInputs.preferredInputDeviceID()
+        if let engine, engineInputDeviceID == inputDeviceID, Self.inputFormatMatchesHardware(engine.inputNode) {
             return engine
         }
 
         discardEngine()
 
         let engine = AVAudioEngine()
+        if let inputDeviceID {
+            do {
+                try engine.inputNode.auAudioUnit.setDeviceID(inputDeviceID)
+                engineInputDeviceID = inputDeviceID
+            } catch {
+                NSLog("OpenWhisper could not select audio input \(inputDeviceID), using the default input: \(error.localizedDescription)")
+            }
+        }
+
         let engineID = ObjectIdentifier(engine)
         engineConfigurationObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
@@ -112,6 +123,7 @@ final class AudioRecorder {
         }
         engineConfigurationObserver = nil
         engine = nil
+        engineInputDeviceID = nil
     }
 
     /// AVAudioEngine stops itself when the input device changes, for example when AirPods connect and
@@ -119,6 +131,12 @@ final class AudioRecorder {
     /// and keep recording on the new input if dictation is in progress.
     private func engineConfigurationChanged(engineID: ObjectIdentifier) {
         guard let engine, ObjectIdentifier(engine) == engineID else { return }
+
+        // Selecting the input device in `currentEngine()` also posts this notification, shortly after
+        // recording has started, while the engine keeps running on a matching format.
+        if engine.isRunning, Self.inputFormatMatchesHardware(engine.inputNode) {
+            return
+        }
 
         discardEngine()
 

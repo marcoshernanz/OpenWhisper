@@ -91,3 +91,17 @@ import Testing
     #expect(configuration.qualityProfile == .accurate)
     #expect(configuration.cleanupMode == .light)
 }
+
+@Test func prefersBuiltInMicrophoneOverBluetoothHeadphones() {
+    let airPods = AudioInputDeviceInfo(id: 104, transport: .bluetooth)
+    let builtIn = AudioInputDeviceInfo(id: 78, transport: .builtIn)
+    let usb = AudioInputDeviceInfo(id: 90, transport: .other)
+    let inputs = [airPods, builtIn, usb]
+
+    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: airPods, availableInputs: inputs, isLidClosed: false) == 78)
+    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: airPods, availableInputs: inputs, isLidClosed: true) == nil)
+    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: airPods, availableInputs: [airPods], isLidClosed: false) == nil)
+    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: usb, availableInputs: inputs, isLidClosed: false) == nil)
+    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: builtIn, availableInputs: inputs, isLidClosed: false) == nil)
+    #expect(MicrophoneSelection.preferredInputDeviceID(defaultInput: nil, availableInputs: inputs, isLidClosed: false) == nil)
+}
