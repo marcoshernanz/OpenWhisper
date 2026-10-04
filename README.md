@@ -36,6 +36,8 @@ Use the menu bar app to choose:
 - Model: Large v3 Turbo, Large v3, Distil Large v3, Medium English, Small English, Base English, or Tiny English. Models marked "Download Required" are not on disk yet; install them with `scripts/setup-whisper.sh <model>`.
 - Cleanup: Off, Light, or Dictation. Cleanup runs locally after transcription and before the one final paste.
 
+Recent Transcripts in the same menu lists your last 50 dictations, so one is not lost when a newer dictation replaces it. Click one to copy it to the clipboard. Paste Last Transcript (`ctrl+cmd+V`) pastes the newest one again.
+
 ## Runtime Configuration
 
 The WhisperKit engine is the default and stores downloaded Core ML models under:
@@ -98,6 +100,8 @@ Restart OpenWhisper after changing it. Keep the list short:
 ## Local-Only Behavior
 
 Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` recording is active, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after recording stops, then the temporary file is removed. If transcription fails, the file is kept until you choose Try Again or Discard Recording, so a long dictation is not lost.
+
+The text of your last 50 dictations stays on disk in `~/Library/Application Support/OpenWhisper/TranscriptHistory.json` for Recent Transcripts. Clear History in that menu deletes it.
 
 ## fn Key Notes
 

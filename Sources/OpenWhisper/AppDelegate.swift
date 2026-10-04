@@ -6,6 +6,7 @@ import OpenWhisperCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Where transcripts were kept before the history, one at a time.
     private static let lastTranscriptDefaultsKey = "LastTranscript"
 
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -30,14 +31,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var functionKeyGesture = FunctionKeyDictationGesture()
     private var pendingFunctionKeyTapWorkItem: DispatchWorkItem?
     private var transcriptionQueue: [URL] = []
-    private var lastTranscript: String?
+    private var transcriptHistory = TranscriptHistory()
     private var pasteLastTranscriptMenuItem: NSMenuItem?
+    private let recentTranscriptsMenu = NSMenu()
     private var accessibilityPromptShown = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureTranscriberFromSettings(warmUp: false)
         configureStatusItem()
-        restoreLastTranscript()
+        migrateLastTranscript()
         warmUpTranscriberIfPossible()
         requestMicrophoneAccess()
         startFnMonitor()
@@ -84,10 +86,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             keyEquivalent: "v"
         )
         pasteLastTranscriptMenuItem.keyEquivalentModifierMask = [.command, .control]
-        pasteLastTranscriptMenuItem.isEnabled = false
+        pasteLastTranscriptMenuItem.isEnabled = !transcriptHistory.entries.isEmpty
         pasteLastTranscriptMenuItem.target = self
         menu.addItem(pasteLastTranscriptMenuItem)
         self.pasteLastTranscriptMenuItem = pasteLastTranscriptMenuItem
+        let recentTranscriptsMenuItem = NSMenuItem(title: "Recent Transcripts", action: nil, keyEquivalent: "")
+        recentTranscriptsMenu.delegate = self
+        menu.addItem(recentTranscriptsMenuItem)
+        menu.setSubmenu(recentTranscriptsMenu, for: recentTranscriptsMenuItem)
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(
             title: "Quit",
@@ -570,19 +576,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func restoreLastTranscript() {
-        guard let transcript = UserDefaults.standard.string(forKey: Self.lastTranscriptDefaultsKey),
-              !transcript.isEmpty
-        else {
+    private func migrateLastTranscript() {
+        guard let transcript = UserDefaults.standard.string(forKey: Self.lastTranscriptDefaultsKey) else {
             return
         }
 
-        rememberTranscript(transcript)
+        if transcriptHistory.entries.isEmpty {
+            do {
+                try transcriptHistory.add(transcript)
+            } catch {
+                NSLog("OpenWhisper could not move the last transcript into the history: \(error.localizedDescription)")
+                return
+            }
+        }
+
+        UserDefaults.standard.removeObject(forKey: Self.lastTranscriptDefaultsKey)
+        pasteLastTranscriptMenuItem?.isEnabled = !transcriptHistory.entries.isEmpty
     }
 
     private func rememberTranscript(_ transcript: String) {
-        lastTranscript = transcript
-        UserDefaults.standard.set(transcript, forKey: Self.lastTranscriptDefaultsKey)
+        do {
+            try transcriptHistory.add(transcript)
+        } catch {
+            NSLog("OpenWhisper could not save the transcript history: \(error.localizedDescription)")
+        }
         pasteLastTranscriptMenuItem?.isEnabled = true
     }
 
@@ -617,7 +634,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         updateSetupWindow()
         setupWindowController?.showWindow(nil)
-        NSApp.activate(ignoringOtherApps: true)
     }
 
     private func updateSetupWindow() {
@@ -713,9 +729,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func pasteLastTranscript() {
-        guard let transcript = lastTranscript ?? UserDefaults.standard.string(forKey: Self.lastTranscriptDefaultsKey),
-              !transcript.isEmpty
-        else {
+        guard let transcript = transcriptHistory.entries.first?.text else {
             NSSound.beep()
             return
         }
@@ -754,8 +768,76 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return currentDirectory.appendingPathComponent("README.md")
     }
 
+    @objc private func copyTranscriptFromHistory(_ sender: NSMenuItem) {
+        guard let transcript = sender.representedObject as? String else { return }
+
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(transcript, forType: .string)
+    }
+
+    @objc private func clearTranscriptHistory() {
+        let alert = NSAlert()
+        alert.messageText = "Clear Transcript History?"
+        alert.informativeText = "This deletes every saved transcript. It cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Clear History")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        do {
+            try transcriptHistory.clear()
+        } catch {
+            NSLog("OpenWhisper could not clear the transcript history: \(error.localizedDescription)")
+        }
+        pasteLastTranscriptMenuItem?.isEnabled = !transcriptHistory.entries.isEmpty
+    }
+
     @objc private func quit() {
         NSApplication.shared.terminate(nil)
+    }
+}
+
+extension AppDelegate: NSMenuDelegate {
+    /// Rebuilt on every open, so the list and its times are current.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        guard menu === recentTranscriptsMenu else { return }
+
+        menu.removeAllItems()
+
+        guard !transcriptHistory.entries.isEmpty else {
+            menu.addItem(NSMenuItem(title: "No Transcripts Yet", action: nil, keyEquivalent: ""))
+            return
+        }
+
+        menu.addItem(NSMenuItem(title: "Click a transcript to copy it", action: nil, keyEquivalent: ""))
+        for entry in transcriptHistory.entries {
+            let item = NSMenuItem(
+                title: "\(Self.historyTimestamp(for: entry.date))   \(entry.preview(maxLength: 60))",
+                action: #selector(copyTranscriptFromHistory(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.representedObject = entry.text
+            item.toolTip = entry.preview(maxLength: 1_000)
+            menu.addItem(item)
+        }
+
+        menu.addItem(NSMenuItem.separator())
+        let clearItem = NSMenuItem(
+            title: "Clear History...",
+            action: #selector(clearTranscriptHistory),
+            keyEquivalent: ""
+        )
+        clearItem.target = self
+        menu.addItem(clearItem)
+    }
+
+    private static func historyTimestamp(for date: Date) -> String {
+        if Calendar.current.isDateInToday(date) {
+            return date.formatted(date: .omitted, time: .shortened)
+        }
+
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 }
 
