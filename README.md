@@ -36,6 +36,8 @@ Use the menu bar app to choose:
 - Model: Large v3 Turbo, Large v3, Distil Large v3, Medium English, Small English, Base English, or Tiny English. Models marked "Download Required" are not on disk yet; install them with `scripts/setup-whisper.sh <model>`.
 - Cleanup: Off, Light, or Dictation. Cleanup runs locally after transcription and before the one final paste.
 
+Recent Transcripts in the same menu lists your last 50 dictations, so one is not lost when a newer dictation replaces it. Click one to copy it to the clipboard. Paste Last Transcript (`ctrl+cmd+V`) pastes the newest one again.
+
 ## Runtime Configuration
 
 The WhisperKit engine is the default and stores downloaded Core ML models under:
@@ -86,11 +88,20 @@ Whisper can misspell names and technical terms, especially inside Spanish senten
 defaults write dev.openwhisper.OpenWhisper InitialPrompt "GitHub, AirPods, OpenWhisper, WhisperKit, pull request."
 ```
 
-Restart OpenWhisper after changing it. Keep the list short: Whisper only reads the last 224 tokens (roughly 150 words), and a long or off-topic list can nudge unrelated words. `OPENWHISPER_PROMPT` overrides it for development. Remove it with `defaults delete dev.openwhisper.OpenWhisper InitialPrompt`.
+Restart OpenWhisper after changing it. Keep the list short:
+
+- WhisperKit only reads the last 111 tokens of it, roughly 30 terms like these.
+- Whisper reads the whole list again for every stretch of audio, so each token makes every dictation slower. A 107-token list takes a short dictation from about 1.5 to about 3.5 seconds on an M4 Mac.
+- Whisper writes at most 224 tokens for each stretch of audio, counting the list. OpenWhisper transcribes long dictations in shorter stretches, cut at pauses, so the transcript always fits, and the longer the list, the more stretches that takes.
+- A long or off-topic list can nudge unrelated words.
+
+`OPENWHISPER_PROMPT` overrides it for development. Remove it with `defaults delete dev.openwhisper.OpenWhisper InitialPrompt`.
 
 ## Local-Only Behavior
 
-Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` recording is active, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after recording stops, then the temporary file is removed.
+Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` recording is active, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after recording stops, then the temporary file is removed. If transcription fails, the file is kept until you choose Try Again or Discard Recording, so a long dictation is not lost.
+
+The text of your last 50 dictations stays on disk in `~/Library/Application Support/OpenWhisper/TranscriptHistory.json` for Recent Transcripts. Clear History in that menu deletes it.
 
 ## fn Key Notes
 
@@ -99,6 +110,12 @@ The `fn`/Globe key is exposed by macOS as a function modifier flag. If macOS bui
 ## Audio Input Notes
 
 OpenWhisper records from the macOS default input device. When that changes, for example when AirPods connect and become the default microphone, OpenWhisper rebuilds its audio engine for the new device, including in the middle of a dictation.
+
+When the default input is Bluetooth headphones such as AirPods, OpenWhisper uses their microphone unless something is playing through them. Recording from them switches them to their headset profile, which cuts playback for about a second when recording starts and stops and lowers its quality in between, so while audio is playing OpenWhisper records from the Mac's built-in microphone instead. With the lid closed, the built-in microphone cannot hear anything, so OpenWhisper uses the headphones. OpenWhisper releases the microphone after every dictation, so the headphones return to full quality right away. The first half second of a dictation through the headphones is silent while they switch profiles. To always use the default input:
+
+```sh
+defaults write dev.openwhisper.OpenWhisper UseBuiltInMicrophoneDuringPlayback -bool false
+```
 
 ## Build an App Bundle
 

@@ -309,7 +309,7 @@ public struct WhisperConfiguration: Sendable, Equatable {
         return (path as NSString).expandingTildeInPath
     }
 
-    private static func appSupportDirectory() -> URL {
+    public static func appSupportDirectory() -> URL {
         let applicationSupportURL = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
