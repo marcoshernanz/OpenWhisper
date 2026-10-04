@@ -504,19 +504,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     self.processNextQueuedRecording()
                 }
             } catch {
-                try? FileManager.default.removeItem(at: recordingURL)
-
                 await MainActor.run {
                     self.isTranscribing = false
                     self.setStatus(.error)
-                    self.showOneTimeAlert(
-                        title: "Transcription Failed",
-                        message: error.localizedDescription
-                    )
+                    if self.askToRetryTranscription(after: error) {
+                        self.transcriptionQueue.insert(recordingURL, at: 0)
+                    } else {
+                        try? FileManager.default.removeItem(at: recordingURL)
+                    }
                     self.processNextQueuedRecording()
                 }
             }
         }
+    }
+
+    /// Keeps the recording until the person decides, so a long dictation is not lost to one failure.
+    private func askToRetryTranscription(after error: Error) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Transcription Failed"
+        alert.informativeText = "\(error.localizedDescription)\n\nThe recording is kept until you choose."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Try Again")
+        alert.addButton(withTitle: "Discard Recording")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
     private func promptForAccessibilityIfNeeded() {

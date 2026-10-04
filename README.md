@@ -86,11 +86,18 @@ Whisper can misspell names and technical terms, especially inside Spanish senten
 defaults write dev.openwhisper.OpenWhisper InitialPrompt "GitHub, AirPods, OpenWhisper, WhisperKit, pull request."
 ```
 
-Restart OpenWhisper after changing it. Keep the list short: Whisper only reads the last 224 tokens (roughly 150 words), and a long or off-topic list can nudge unrelated words. `OPENWHISPER_PROMPT` overrides it for development. Remove it with `defaults delete dev.openwhisper.OpenWhisper InitialPrompt`.
+Restart OpenWhisper after changing it. Keep the list short:
+
+- WhisperKit only reads the last 111 tokens of it, roughly 30 terms like these.
+- Whisper reads the whole list again for every stretch of audio, so each token makes every dictation slower. A 107-token list takes a short dictation from about 1.5 to about 3.5 seconds on an M4 Mac.
+- Whisper writes at most 224 tokens for each stretch of audio, counting the list. OpenWhisper transcribes long dictations in shorter stretches, cut at pauses, so the transcript always fits, and the longer the list, the more stretches that takes.
+- A long or off-topic list can nudge unrelated words.
+
+`OPENWHISPER_PROMPT` overrides it for development. Remove it with `defaults delete dev.openwhisper.OpenWhisper InitialPrompt`.
 
 ## Local-Only Behavior
 
-Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` recording is active, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after recording stops, then the temporary file is removed.
+Runtime dictation does not use network services after the local model is downloaded. Audio is streamed into a temporary local 16 kHz mono WAV file while `fn` recording is active, transcribed locally with WhisperKit or whisper.cpp, optionally cleaned up locally, inserted into the focused app once after recording stops, then the temporary file is removed. If transcription fails, the file is kept until you choose Try Again or Discard Recording, so a long dictation is not lost.
 
 ## fn Key Notes
 
