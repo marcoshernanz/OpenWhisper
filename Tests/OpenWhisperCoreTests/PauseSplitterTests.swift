@@ -3,18 +3,72 @@ import Testing
 
 private let sampleRate = 16_000
 
-/// A 200 Hz square wave standing in for speech, with silence over the given seconds. Every 100 ms frame
-/// of it has exactly the same energy.
-private func speech(seconds: Double, silences: [ClosedRange<Double>] = []) -> [Float] {
+/// A 200 Hz square wave standing in for speech, with silence over the given seconds. Every 20 ms frame
+/// of it has exactly the same energy. The silence can carry background noise 40 dB below the speech.
+private func speech(seconds: Double, silences: [ClosedRange<Double>] = [], noisy: Bool = false) -> [Float] {
     var samples = (0..<Int(seconds * Double(sampleRate))).map { index -> Float in
         index % 80 < 40 ? 0.5 : -0.5
     }
     for silence in silences {
         let start = Int((silence.lowerBound * Double(sampleRate)).rounded(.up))
         let end = min(samples.count - 1, Int(silence.upperBound * Double(sampleRate)))
-        samples.replaceSubrange(start...end, with: repeatElement(0, count: end - start + 1))
+        for index in start...end {
+            samples[index] = noisy ? (index % 2 == 0 ? 0.005 : -0.005) : 0
+        }
     }
     return samples
+}
+
+private func cutSeconds(_ parts: [ArraySlice<Float>]) -> [Double] {
+    parts.dropFirst().map { Double($0.startIndex) / Double(sampleRate) }
+}
+
+/// Short pauses between words every 2.5 seconds, and longer ones between sentences.
+private func sentences(seconds: Double, sentencePauses: [ClosedRange<Double>], noisy: Bool = false) -> [Float] {
+    let wordPauses = stride(from: 1.0, to: seconds, by: 2.5).map { $0...($0 + 0.2) }
+    return speech(seconds: seconds, silences: wordPauses + sentencePauses, noisy: noisy)
+}
+
+@Test func endsEachPartInTheLongestPause() {
+    let samples = sentences(seconds: 40, sentencePauses: [10...10.8, 24...24.8])
+
+    let parts = PauseSplitter.split(samples[...], maxPartLength: 18 * sampleRate, sampleRate: sampleRate)
+
+    let cuts = cutSeconds(parts)
+    #expect(cuts.count == 2)
+    #expect((10...10.8).contains(cuts[0]))
+    #expect((24...24.8).contains(cuts[1]))
+}
+
+@Test func findsPausesInBackgroundNoise() {
+    let samples = sentences(seconds: 40, sentencePauses: [10...10.8, 24...24.8], noisy: true)
+
+    let parts = PauseSplitter.split(samples[...], maxPartLength: 18 * sampleRate, sampleRate: sampleRate)
+
+    let cuts = cutSeconds(parts)
+    #expect(cuts.count == 2)
+    #expect((10...10.8).contains(cuts[0]))
+    #expect((24...24.8).contains(cuts[1]))
+}
+
+@Test func prefersTheLaterOfTwoSimilarPauses() {
+    let samples = sentences(seconds: 30, sentencePauses: [10...10.8, 15...15.7])
+
+    let parts = PauseSplitter.split(samples[...], maxPartLength: 18 * sampleRate, sampleRate: sampleRate)
+
+    let cuts = cutSeconds(parts)
+    #expect(cuts.count == 1)
+    #expect((15...15.7).contains(cuts[0]))
+}
+
+@Test func keepsEachPartAtLeastHalfTheLongestAllowed() {
+    let samples = sentences(seconds: 30, sentencePauses: [4...6, 13...13.6])
+
+    let parts = PauseSplitter.split(samples[...], maxPartLength: 18 * sampleRate, sampleRate: sampleRate)
+
+    let cuts = cutSeconds(parts)
+    #expect(cuts.count == 1)
+    #expect((13...13.6).contains(cuts[0]))
 }
 
 @Test func cutsInThePauseNearestTheMiddle() {
