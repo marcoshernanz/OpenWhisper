@@ -103,6 +103,13 @@ public actor WhisperKitTranscriber {
             .joined(separator: " ")
     }
 
+    /// Whisper decodes a window again at a higher temperature when its text compresses too well, which is
+    /// meant to catch it repeating itself. Dictated numbers, such as the rows of a matrix, compress just as
+    /// well, and the retries sample random text: they took up to five times as long, cut the text short and
+    /// sometimes switched language. A window that really repeats itself runs out of tokens and is transcribed
+    /// again in halves instead.
+    ///
+    /// Without a temperature increment, every retry would decode the same text again.
     private func decodingOptions(promptTokens: [Int]?) -> DecodingOptions {
         DecodingOptions(
             verbose: false,
@@ -110,10 +117,12 @@ public actor WhisperKitTranscriber {
             language: configuration.usesAutomaticLanguageDetection ? nil : configuration.language,
             temperature: Float(configuration.temperature),
             temperatureIncrementOnFallback: Float(configuration.temperatureIncrement),
+            temperatureFallbackCount: configuration.temperatureIncrement > 0 ? Self.temperatureFallbackCount : 0,
             detectLanguage: configuration.usesAutomaticLanguageDetection,
             skipSpecialTokens: true,
             withoutTimestamps: true,
-            promptTokens: promptTokens
+            promptTokens: promptTokens,
+            compressionRatioThreshold: nil
         )
     }
 
@@ -183,6 +192,7 @@ public actor WhisperKitTranscriber {
     private static let shortestWindowToSplit = 4 * WhisperKit.sampleRate
     private static let concurrentWindowCount = 4
     private static let attemptsPerWindow = 3
+    private static let temperatureFallbackCount = 5
 }
 
 private enum WindowTranscript: Sendable {
