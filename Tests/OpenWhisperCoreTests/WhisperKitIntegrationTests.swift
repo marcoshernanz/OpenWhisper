@@ -84,6 +84,57 @@ import Testing
     )
 ])
 func keepsTheEndOfFastDictationUnderALongVocabularyPrompt(fixture: SpokenFixture) async throws {
+    try await expectTranscriptUnderALongVocabularyPrompt(of: fixture)
+}
+
+/// Whisper leaves out the start of a window that begins in the middle of a sentence, and it retried windows
+/// of dictated numbers at random temperatures until their text came out short or in another language.
+@Test(arguments: [
+    SpokenFixture(
+        voice: "Paulina",
+        rate: 165,
+        text: """
+        Para esta, no valdría algo como... [[slnc 1800]] menos uno, cero, uno. [[slnc 1200]] Menos dos, cero, \
+        dos. [[slnc 1200]] Menos uno, cero, uno. [[slnc 2500]] Porque así detectamos los bordes verticales, \
+        ¿no? [[slnc 2000]] Y para los horizontales sería la traspuesta: menos uno, menos dos, menos uno. \
+        Cero, cero, cero. Uno, dos, uno. [[slnc 2200]] ¿Eso es lo que nos piden en el ejercicio, o lo he \
+        entendido mal?
+        """,
+        expectedPhrases: ["bordes verticales", "menos 1, menos 2, menos 1", "lo he entendido mal"]
+    ),
+    SpokenFixture(
+        voice: "Paulina",
+        rate: 175,
+        text: """
+        Invariante a desplazamientos de la imagen creo que no porque si por ejemplo movemos la imagen a la \
+        izquierda la correlación también se va a mover a la izquierda. [[slnc 1300]] Variante a la rotación, \
+        creo que tampoco, porque si rotamos la imagen entonces va a cambiar. [[slnc 1300]] Invariante a \
+        cambios de iluminación en la imagen. [[slnc 1300]] Creo que tampoco porque por el ejemplo de antes si \
+        multiplicamos todo por dos el resultado también se va a multiplicar por dos. [[slnc 1300]] \
+        ¿Invariante a cambio de iluminación en el patrón? [[slnc 1300]] Creo que tampoco porque si. \
+        [[slnc 1300]] Multiplicamos el patrón por 2, también va a multiplicarse por 2 el resultado. \
+        [[slnc 1300]] De todas estas lo que más me suena es invariante a desplazamientos de la imagen, pero \
+        creo que también se desplazaría el patrón.
+        """,
+        expectedPhrases: ["rotamos la imagen", "el resultado también se va a multiplicar", "desplazaría el patrón"]
+    ),
+    SpokenFixture(
+        voice: "Paulina",
+        rate: 140,
+        text: """
+        Para esta no valdría algo como [[slnc 2500]] 0, menos 1, 0, menos 1, 4, menos 1, 0, menos 1, 0, \
+        [[slnc 3000]] y la de media sería 1, 1, 1, 1, 1, 1, 1, 1, 1, dividido entre 9, [[slnc 2500]] o la de \
+        Sobel, menos 1, 0, 1, menos 2, 0, 2, menos 1, 0, 1, [[slnc 2000]] y su traspuesta menos 1, menos 2, \
+        menos 1, 0, 0, 0, 1, 2, 1.
+        """,
+        expectedPhrases: ["la de media sería", "dividido entre 9", "sobel", "0, 0, 0, 1, 2, 1"]
+    )
+])
+func keepsEveryWindowOfADictationUnderALongVocabularyPrompt(fixture: SpokenFixture) async throws {
+    try await expectTranscriptUnderALongVocabularyPrompt(of: fixture)
+}
+
+private func expectTranscriptUnderALongVocabularyPrompt(of fixture: SpokenFixture) async throws {
     let environment = ProcessInfo.processInfo.environment
     guard environment["OPENWHISPER_RUN_WHISPERKIT_INTEGRATION"] == "1" else {
         return
@@ -118,6 +169,10 @@ func keepsTheEndOfFastDictationUnderALongVocabularyPrompt(fixture: SpokenFixture
     }
 }
 
+enum FixtureError: Error {
+    case missingVoice(String)
+}
+
 struct SpokenFixture: Sendable, CustomTestStringConvertible {
     let voice: String
     let rate: Int
@@ -127,7 +182,15 @@ struct SpokenFixture: Sendable, CustomTestStringConvertible {
     var testDescription: String { "\(voice), ending \"\(expectedPhrases.last ?? "")\"" }
 
     /// Speaks the text with macOS text to speech into a 16 kHz mono WAV, like the ones AudioRecorder writes.
+    ///
+    /// `say` reads with the default voice when it does not find the one named, which turns Spanish into
+    /// English gibberish. It does not find names with accents, such as Mónica, when they come from Swift.
     func synthesize() async throws -> URL {
+        let voices = try await Shell.run(executableURL: URL(fileURLWithPath: "/usr/bin/say"), arguments: ["-v", "?"])
+        guard voices.stdout.split(separator: "\n").contains(where: { $0.hasPrefix(voice + " ") }) else {
+            throw FixtureError.missingVoice(voice)
+        }
+
         let base = FileManager.default.temporaryDirectory
             .appendingPathComponent("openwhisper-test-\(UUID().uuidString)")
         let speechURL = base.appendingPathExtension("aiff")
