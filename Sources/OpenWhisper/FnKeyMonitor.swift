@@ -5,9 +5,11 @@ final class FnKeyMonitor {
     private var globalMonitor: Any?
     private var localMonitor: Any?
     private var fnIsDown = false
-    private let onChange: @Sendable (Bool) -> Void
+    /// Whether fn is down and when it moved, in seconds since startup. That time comes from the key event
+    /// itself, so it stays accurate when the event is handled late.
+    private let onChange: @Sendable (Bool, TimeInterval) -> Void
 
-    init(onChange: @escaping @Sendable (Bool) -> Void) {
+    init(onChange: @escaping @Sendable (Bool, TimeInterval) -> Void) {
         self.onChange = onChange
     }
 
@@ -48,8 +50,16 @@ final class FnKeyMonitor {
         guard isDown != fnIsDown else { return }
 
         fnIsDown = isDown
-        onChange(isDown)
+        onChange(isDown, Self.time(of: event))
     }
+
+    /// Events posted by other apps can carry no time at all, so those count as happening now.
+    private static func time(of event: NSEvent) -> TimeInterval {
+        let now = ProcessInfo.processInfo.systemUptime
+        return (now - longestEventDelay...now).contains(event.timestamp) ? event.timestamp : now
+    }
+
+    private static let longestEventDelay: TimeInterval = 10
 }
 
 enum FnKeyMonitorError: Error, LocalizedError {
