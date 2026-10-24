@@ -273,9 +273,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startFnMonitor() {
         promptForAccessibilityIfNeeded()
 
-        let monitor = FnKeyMonitor { [weak self] isDown in
+        let monitor = FnKeyMonitor { [weak self] isDown, timestamp in
             Task { @MainActor in
-                self?.handleFunctionKeyChange(isDown: isDown)
+                self?.handleFunctionKeyChange(isDown: isDown, at: timestamp)
             }
         }
 
@@ -345,9 +345,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func handleFunctionKeyChange(isDown: Bool) {
-        let timestamp = currentFunctionKeyTimestamp()
-
+    /// Taps are timed by when fn moved rather than when its event is handled. Starting a recording keeps
+    /// the app busy for a moment, longer on a slow Mac, so the release of a quick tap is often handled
+    /// late and would otherwise look like a hold.
+    private func handleFunctionKeyChange(isDown: Bool, at timestamp: TimeInterval) {
         if isDown {
             handleFunctionKeyGestureAction(functionKeyGesture.expirePendingTap(at: timestamp))
             handleFunctionKeyGestureAction(functionKeyGesture.keyDown(at: timestamp))
@@ -368,22 +369,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .finishRecording:
             cancelPendingFunctionKeyTap()
             finishDictation()
-        case .waitForSecondTap(let deadline):
-            schedulePendingFunctionKeyTap(deadline: deadline)
+        case .waitForSecondTap(let checkTime):
+            schedulePendingFunctionKeyTapCheck(at: checkTime)
         case .lockRecording:
             cancelPendingFunctionKeyTap()
             refreshActivityStatus()
         }
     }
 
-    private func schedulePendingFunctionKeyTap(deadline: TimeInterval) {
+    private func schedulePendingFunctionKeyTapCheck(at checkTime: TimeInterval) {
         cancelPendingFunctionKeyTap()
 
-        let delay = max(0, deadline - currentFunctionKeyTimestamp())
+        let delay = max(0, checkTime - currentFunctionKeyTimestamp())
         let workItem = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.handleFunctionKeyGestureAction(
-                self.functionKeyGesture.expirePendingTap(at: self.currentFunctionKeyTimestamp())
+                self.functionKeyGesture.checkPendingTap(
+                    at: self.currentFunctionKeyTimestamp(),
+                    scheduledFor: checkTime
+                )
             )
         }
         pendingFunctionKeyTapWorkItem = workItem
@@ -395,6 +399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         pendingFunctionKeyTapWorkItem = nil
     }
 
+    /// Seconds since startup, like key event times.
     private func currentFunctionKeyTimestamp() -> TimeInterval {
         ProcessInfo.processInfo.systemUptime
     }
