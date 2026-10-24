@@ -5,7 +5,8 @@ public struct FunctionKeyDictationGesture: Sendable, Equatable {
         case none
         case startRecording
         case finishRecording
-        case waitForSecondTap(deadline: TimeInterval)
+        /// Check at `checkAt` whether a second tap came, with `checkPendingTap`.
+        case waitForSecondTap(checkAt: TimeInterval)
         case lockRecording
     }
 
@@ -65,7 +66,7 @@ public struct FunctionKeyDictationGesture: Sendable, Equatable {
 
             let deadline = timestamp + doubleTapInterval
             state = .waitingForSecondTap(deadline: deadline)
-            return .waitForSecondTap(deadline: deadline)
+            return .waitForSecondTap(checkAt: deadline)
         case .waitingForSecondTap:
             return .none
         case .locked:
@@ -76,6 +77,7 @@ public struct FunctionKeyDictationGesture: Sendable, Equatable {
         }
     }
 
+    /// Ends a tap that no second tap followed, for a key event at `timestamp` after its deadline.
     public mutating func expirePendingTap(at timestamp: TimeInterval) -> Action {
         guard case .waitingForSecondTap(let deadline) = state,
               timestamp >= deadline
@@ -87,7 +89,37 @@ public struct FunctionKeyDictationGesture: Sendable, Equatable {
         return .finishRecording
     }
 
+    /// Ends a tap that no second tap followed, from a check that was due at `scheduledTime`.
+    ///
+    /// A check that runs late means the app was too busy to handle key events, so a second tap made in
+    /// time may still be waiting to be handled. The check is then made again shortly instead, until one
+    /// runs on time or a few seconds have passed.
+    public mutating func checkPendingTap(
+        at timestamp: TimeInterval,
+        scheduledFor scheduledTime: TimeInterval
+    ) -> Action {
+        guard case .waitingForSecondTap(let deadline) = state else {
+            return .none
+        }
+
+        guard timestamp >= deadline else {
+            return .waitForSecondTap(checkAt: deadline)
+        }
+
+        let isLate = timestamp - scheduledTime > Self.lateCheckTolerance
+        if isLate, timestamp - deadline < Self.longestKeyEventDelay {
+            return .waitForSecondTap(checkAt: timestamp + Self.recheckInterval)
+        }
+
+        state = .idle
+        return .finishRecording
+    }
+
     public mutating func cancel() {
         state = .idle
     }
+
+    private static let lateCheckTolerance: TimeInterval = 0.05
+    private static let recheckInterval: TimeInterval = 0.05
+    private static let longestKeyEventDelay: TimeInterval = 3
 }
