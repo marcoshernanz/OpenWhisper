@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import OpenWhisperCore
 
-/// Serialized because the stub answers every request in the test process.
+/// Serialized because the stub answers every Deepgram request in the test process.
 @Suite(.serialized)
 struct DeepgramTranscriberTests {
     @Test func readsTheVocabularyAsKeyterms() {
@@ -96,7 +96,7 @@ struct DeepgramTranscriberTests {
         defer { try? FileManager.default.removeItem(at: recording) }
         let transcriber = transcriber()
 
-        await #expect(throws: DeepgramError.self) {
+        await #expect(throws: CloudTranscriptionError.self) {
             try await transcriber.transcribe(wavURL: recording)
         }
         #expect(try await transcriber.transcribe(wavURL: recording) == "fine")
@@ -139,19 +139,19 @@ struct DeepgramTranscriberTests {
     }
 
     @Test(arguments: [
-        (401, DeepgramError.rejectedKey("Invalid credentials.")),
-        (403, DeepgramError.rejectedKey("Invalid credentials.")),
-        (402, DeepgramError.outOfCredits("Invalid credentials.")),
-        (400, DeepgramError.rejectedRequest("Invalid credentials."))
+        (401, CloudTranscriptionError.Problem.rejectedKey("Invalid credentials.")),
+        (403, CloudTranscriptionError.Problem.rejectedKey("Invalid credentials.")),
+        (402, CloudTranscriptionError.Problem.outOfCredits("Invalid credentials.")),
+        (400, CloudTranscriptionError.Problem.rejectedRequest("Invalid credentials."))
     ])
-    func explainsWhatDeepgramRejected(statusCode: Int, expected: DeepgramError) async throws {
+    func explainsWhatDeepgramRejected(statusCode: Int, expected: CloudTranscriptionError.Problem) async throws {
         DeepgramStub.reset(replies: [
             .status(statusCode, #"{"err_code":"INVALID_AUTH","err_msg":"Invalid credentials.","request_id":"1"}"#)
         ])
         let recording = try writeRecording([1])
         defer { try? FileManager.default.removeItem(at: recording) }
 
-        await #expect(throws: expected) {
+        await #expect(throws: CloudTranscriptionError(.deepgram, expected)) {
             try await transcriber(language: "en").transcribe(wavURL: recording)
         }
         #expect(DeepgramStub.requests.count == 1)
@@ -171,7 +171,7 @@ struct DeepgramTranscriberTests {
         let recording = try writeRecording([1])
         defer { try? FileManager.default.removeItem(at: recording) }
 
-        await #expect(throws: DeepgramError.unavailable(statusCode: 429, message: "slow down")) {
+        await #expect(throws: CloudTranscriptionError(.deepgram, .unavailable(statusCode: 429, message: "slow down"))) {
             try await transcriber().transcribe(wavURL: recording)
         }
         #expect(DeepgramStub.requests.count == 2)
@@ -183,10 +183,10 @@ struct DeepgramTranscriberTests {
         let recording = try writeRecording([1])
         defer { try? FileManager.default.removeItem(at: recording) }
 
-        let error = await #expect(throws: DeepgramError.self) {
+        let error = await #expect(throws: CloudTranscriptionError.self) {
             try await transcriber().transcribe(wavURL: recording)
         }
-        guard case .unreachable(.notConnectedToInternet, _) = error else {
+        guard case .unreachable(.notConnectedToInternet, _) = error?.problem else {
             Issue.record("Expected no connection, got \(String(describing: error))")
             return
         }
@@ -206,7 +206,7 @@ struct DeepgramTranscriberTests {
         let recording = try writeRecording([1])
         defer { try? FileManager.default.removeItem(at: recording) }
 
-        await #expect(throws: DeepgramError.invalidResponse) {
+        await #expect(throws: CloudTranscriptionError(.deepgram, .invalidResponse)) {
             try await transcriber().transcribe(wavURL: recording)
         }
     }
@@ -216,7 +216,7 @@ struct DeepgramTranscriberTests {
         let transcriber = transcriber(apiKey: "secret")
 
         try await transcriber.validateKey()
-        await #expect(throws: DeepgramError.rejectedKey("Invalid credentials.")) {
+        await #expect(throws: CloudTranscriptionError(.deepgram, .rejectedKey("Invalid credentials."))) {
             try await transcriber.validateKey()
         }
 
@@ -235,30 +235,28 @@ struct DeepgramTranscriberTests {
     }
 
     @Test func describesWhyDeepgramFailed() {
-        #expect(DeepgramError.rejectedKey("Invalid credentials.").localizedDescription == "Deepgram rejected the API key: Invalid credentials.")
-        #expect(DeepgramError.rejectedKey("").localizedDescription == "Deepgram rejected the API key.")
+        #expect(CloudTranscriptionError(.deepgram, .rejectedKey("Invalid credentials.")).localizedDescription == "Deepgram rejected the API key: Invalid credentials.")
+        #expect(CloudTranscriptionError(.deepgram, .rejectedKey("")).localizedDescription == "Deepgram rejected the API key.")
         #expect(
-            DeepgramError.unavailable(statusCode: 503, message: "busy").localizedDescription
+            CloudTranscriptionError(.deepgram, .unavailable(statusCode: 503, message: "busy")).localizedDescription
                 == "Deepgram is unavailable (HTTP 503): busy."
         )
     }
 
     @Test func onlyAskToFixTheKeyOrTheAccount() {
-        #expect(DeepgramError.rejectedKey("").needsAttention)
-        #expect(DeepgramError.outOfCredits("").needsAttention)
-        #expect(!DeepgramError.unreachable(code: .timedOut, message: "").needsAttention)
-        #expect(!DeepgramError.unavailable(statusCode: 500, message: "").needsAttention)
-        #expect(!DeepgramError.rejectedRequest("").needsAttention)
+        #expect(CloudTranscriptionError(.deepgram, .rejectedKey("")).needsAttention)
+        #expect(CloudTranscriptionError(.deepgram, .outOfCredits("")).needsAttention)
+        #expect(!CloudTranscriptionError(.deepgram, .unreachable(code: .timedOut, message: "")).needsAttention)
+        #expect(!CloudTranscriptionError(.deepgram, .unavailable(statusCode: 500, message: "")).needsAttention)
+        #expect(!CloudTranscriptionError(.deepgram, .rejectedRequest("")).needsAttention)
     }
 
     private func transcriber(apiKey: String = "key", language: String = "auto", vocabulary: String = "") -> DeepgramTranscriber {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [DeepgramStub.self]
-        return DeepgramTranscriber(
+        DeepgramTranscriber(
             apiKey: apiKey,
             language: language,
             vocabulary: vocabulary,
-            session: URLSession(configuration: configuration),
+            session: DeepgramStub.session(),
             retryDelay: .zero
         )
     }
@@ -268,116 +266,8 @@ struct DeepgramTranscriberTests {
     }
 }
 
-/// A recording as AudioRecorder writes it: a 44-byte header and 16 kHz mono 16-bit samples.
-func writeRecording(_ samples: [Int16]) throws -> URL {
-    let url = FileManager.default.temporaryDirectory.appendingPathComponent("openwhisper-test-\(UUID().uuidString).wav")
-    try wav(samples).write(to: url)
-    return url
-}
-
-func wav(_ samples: [Int16], extraChunk: Data = Data()) -> Data {
-    let data = pcm(samples)
-    var wav = Data("RIFF".utf8)
-    wav.append(littleEndian: UInt32(4 + 24 + extraChunk.count + 8 + data.count))
-    wav.append(Data("WAVEfmt ".utf8))
-    wav.append(littleEndian: UInt32(16))
-    wav.append(littleEndian: UInt16(1))
-    wav.append(littleEndian: UInt16(1))
-    wav.append(littleEndian: UInt32(16_000))
-    wav.append(littleEndian: UInt32(32_000))
-    wav.append(littleEndian: UInt16(2))
-    wav.append(littleEndian: UInt16(16))
-    wav.append(extraChunk)
-    wav.append(Data("data".utf8))
-    wav.append(littleEndian: UInt32(data.count))
-    wav.append(data)
-    return wav
-}
-
-func pcm(_ samples: [Int16]) -> Data {
-    var data = Data()
-    for sample in samples {
-        data.append(littleEndian: UInt16(bitPattern: sample))
-    }
-    return data
-}
-
-extension Data {
-    mutating func append<Integer: FixedWidthInteger>(littleEndian value: Integer) {
-        Swift.withUnsafeBytes(of: value.littleEndian) { append(contentsOf: $0) }
-    }
-}
-
 private extension [URLQueryItem] {
     func value(_ name: String) -> [String] {
         filter { $0.name == name }.compactMap(\.value)
-    }
-}
-
-/// Answers each request with the next reply, and keeps the requests with their bodies.
-final class DeepgramStub: URLProtocol, @unchecked Sendable {
-    enum Reply {
-        case status(Int, String)
-        case failure(URLError.Code)
-
-        static func transcript(_ text: String) -> Reply {
-            let alternative = ["transcript": text, "confidence": 0.9] as [String: Any]
-            let response = ["results": ["channels": [["alternatives": [alternative]]]]]
-            let body = try! JSONSerialization.data(withJSONObject: response)
-            return .status(200, String(data: body, encoding: .utf8)!)
-        }
-    }
-
-    private static let lock = NSLock()
-    nonisolated(unsafe) private static var pendingReplies: [Reply] = []
-    nonisolated(unsafe) private static var receivedRequests: [(URLRequest, Data)] = []
-
-    static var requests: [(URLRequest, Data)] {
-        lock.withLock { receivedRequests }
-    }
-
-    static func reset(replies: [Reply]) {
-        lock.withLock {
-            pendingReplies = replies
-            receivedRequests = []
-        }
-    }
-
-    override class func canInit(with request: URLRequest) -> Bool { true }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-    override func startLoading() {
-        let body = request.httpBody ?? request.httpBodyStream.map(Self.read) ?? Data()
-        let reply = Self.lock.withLock {
-            Self.receivedRequests.append((request, body))
-            return Self.pendingReplies.isEmpty ? Reply.status(500, "no reply") : Self.pendingReplies.removeFirst()
-        }
-
-        switch reply {
-        case .status(let statusCode, let body):
-            let response = HTTPURLResponse(url: request.url!, statusCode: statusCode, httpVersion: "HTTP/1.1", headerFields: nil)!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: Data(body.utf8))
-            client?.urlProtocolDidFinishLoading(self)
-        case .failure(let code):
-            client?.urlProtocol(self, didFailWithError: URLError(code))
-        }
-    }
-
-    override func stopLoading() {}
-
-    private static func read(_ stream: InputStream) -> Data {
-        stream.open()
-        defer { stream.close() }
-
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 16_384)
-        while stream.hasBytesAvailable {
-            let count = stream.read(&buffer, maxLength: buffer.count)
-            guard count > 0 else { break }
-            data.append(buffer, count: count)
-        }
-        return data
     }
 }
