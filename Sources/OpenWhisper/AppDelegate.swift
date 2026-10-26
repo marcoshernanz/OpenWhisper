@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var qualityMenuItems: [NSMenuItem] = []
     private var modelMenuItems: [NSMenuItem] = []
     private var cleanupMenuItems: [NSMenuItem] = []
+    private var keepRecordingsMenuItem: NSMenuItem?
     private var transcriberReloadGeneration = 0
     private var isRecording = false
     private var isTranscribing = false
@@ -35,10 +36,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pasteLastTranscriptMenuItem: NSMenuItem?
     private let recentTranscriptsMenu = NSMenu()
     private var accessibilityPromptShown = false
-    private var deepgramProblemShown = false
+    private var cloudProblemsShown: Set<CloudService> = []
     /// Read once at launch and kept up to date by the key dialog, because reading the keychain can wait on it
     /// being unlocked.
-    private var storedDeepgramAPIKey: String?
+    private var storedAPIKeys: [CloudService: String] = [:]
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         configureStatusItem()
@@ -50,7 +51,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // A dictation started before this finishes waits in the queue for the transcriber.
         Task {
-            storedDeepgramAPIKey = await Task.detached { DeepgramAPIKeyStore.standard.read() }.value
+            storedAPIKeys = await Task.detached {
+                var keys: [CloudService: String] = [:]
+                for service in CloudService.allCases {
+                    keys[service] = service.keyStore.read()
+                }
+                return keys
+            }.value
             configureTranscriberFromSettings(warmUp: false)
             warmUpTranscriberIfPossible()
         }
@@ -132,13 +139,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(engineMenuItem)
         menu.setSubmenu(engineMenu, for: engineMenuItem)
 
-        let deepgramAPIKeyMenuItem = NSMenuItem(
-            title: "Deepgram API Key...",
-            action: #selector(showDeepgramAPIKeyDialog),
-            keyEquivalent: ""
-        )
-        deepgramAPIKeyMenuItem.target = self
-        menu.addItem(deepgramAPIKeyMenuItem)
+        for service in CloudService.allCases {
+            let apiKeyMenuItem = NSMenuItem(
+                title: "\(service.displayName) API Key...",
+                action: #selector(showAPIKeyDialog(_:)),
+                keyEquivalent: ""
+            )
+            apiKeyMenuItem.target = self
+            apiKeyMenuItem.representedObject = service.rawValue
+            menu.addItem(apiKeyMenuItem)
+        }
 
         let languageMenuItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         let languageMenu = NSMenu()
@@ -203,13 +213,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(cleanupMenuItem)
         menu.setSubmenu(cleanupMenu, for: cleanupMenuItem)
+
+        let keepRecordingsMenuItem = NSMenuItem(
+            title: "Keep Last \(RecordingArchive.defaultLimit) Recordings",
+            action: #selector(toggleKeepingRecordings),
+            keyEquivalent: ""
+        )
+        keepRecordingsMenuItem.target = self
+        menu.addItem(keepRecordingsMenuItem)
+        self.keepRecordingsMenuItem = keepRecordingsMenuItem
     }
 
     private func configureTranscriberFromSettings(warmUp: Bool = true) {
         let previousTranscriber = transcriber
         let configuration = WhisperConfiguration.resolved(
             bundleURL: Bundle.main.bundleURL,
-            storedDeepgramAPIKey: storedDeepgramAPIKey
+            storedAPIKeys: storedAPIKeys
         )
         let nextTranscriber = WhisperTranscriber(configuration: configuration)
         transcriberReloadGeneration += 1
@@ -248,6 +267,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func updateSettingsMenuItems() {
+        keepRecordingsMenuItem?.state = UserDefaults.standard.bool(forKey: OpenWhisperDefaultsKey.keepRecentRecordings)
+            ? .on
+            : .off
+
         guard let whisperConfiguration else { return }
 
         for item in engineMenuItems {
@@ -255,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 continue
             }
 
-            let needsAPIKey = engine == .deepgram && whisperConfiguration.deepgramAPIKey == nil
+            let needsAPIKey = engine.cloudService.map { whisperConfiguration.apiKeys[$0] == nil } ?? false
             item.title = needsAPIKey ? "\(engine.displayName) - Add API Key" : engine.displayName
             item.state = engine == whisperConfiguration.transcriptionEngine ? .on : .off
         }
@@ -356,8 +379,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        // Deepgram only opens a connection, which has nothing to wait for.
-        guard whisperConfiguration.transcriptionEngine != .deepgram else {
+        // A cloud service only opens a connection, which has nothing to wait for.
+        guard whisperConfiguration.transcriptionEngine.cloudService == nil else {
             Task { await transcriber.warmUpServer() }
             return
         }
@@ -535,7 +558,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task {
             do {
                 let outcome = try await transcriber.transcribe(wavURL: recordingURL)
-                try? FileManager.default.removeItem(at: recordingURL)
+                Self.keepOrRemove(recordingURL, outcome: outcome)
 
                 await MainActor.run {
                     self.isTranscribing = false
@@ -543,8 +566,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                         self.rememberTranscript(outcome.text)
                         TextInserter.insert(outcome.text)
                     }
-                    if let deepgramFailure = outcome.deepgramFailure, deepgramFailure.needsAttention {
-                        self.showDeepgramProblem(deepgramFailure)
+                    if let failure = outcome.cloudFailures.first(where: \.needsAttention) {
+                        self.showCloudProblem(failure, transcribedWith: outcome.service)
                     }
                     self.processNextQueuedRecording()
                 }
@@ -563,36 +586,51 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Shown once per launch, because every dictation until the key is fixed falls back the same way.
-    /// It waits until nothing is left to paste, which would otherwise land in the alert instead of the
-    /// focused app.
-    private func showDeepgramProblem(_ failure: DeepgramError) {
-        guard !deepgramProblemShown else { return }
-        deepgramProblemShown = true
-        showDeepgramProblemWhenIdle(failure)
+    /// Kept only when the person asked for it in the menu.
+    private nonisolated static func keepOrRemove(_ recordingURL: URL, outcome: TranscriptionOutcome) {
+        if UserDefaults.standard.bool(forKey: OpenWhisperDefaultsKey.keepRecentRecordings) {
+            do {
+                try RecordingArchive.standard.keep(recordingURL, outcome: outcome)
+                return
+            } catch {
+                NSLog("OpenWhisper could not keep the recording: \(error.localizedDescription)")
+            }
+        }
+
+        try? FileManager.default.removeItem(at: recordingURL)
     }
 
-    private func showDeepgramProblemWhenIdle(_ failure: DeepgramError) {
+    /// Shown once per launch for each service, because every dictation until the key is fixed falls back the
+    /// same way. It waits until nothing is left to paste, which would otherwise land in the alert instead of
+    /// the focused app.
+    private func showCloudProblem(_ failure: CloudTranscriptionError, transcribedWith service: CloudService?) {
+        guard !cloudProblemsShown.contains(failure.service) else { return }
+        cloudProblemsShown.insert(failure.service)
+        showCloudProblemWhenIdle(failure, transcribedWith: service)
+    }
+
+    private func showCloudProblemWhenIdle(_ failure: CloudTranscriptionError, transcribedWith service: CloudService?) {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
             guard let self else { return }
             guard !self.isRecording, !self.isTranscribing, self.transcriptionQueue.isEmpty else {
-                self.showDeepgramProblemWhenIdle(failure)
+                self.showCloudProblemWhenIdle(failure, transcribedWith: service)
                 return
             }
 
             let alert = NSAlert()
-            alert.messageText = "Deepgram Needs Attention"
+            alert.messageText = "\(failure.service.displayName) Needs Attention"
             alert.informativeText = """
             \(failure.localizedDescription)
 
-            OpenWhisper transcribed this dictation on this Mac instead, and will keep doing so until the key works.
+            OpenWhisper transcribed this dictation \(service.map { "with \($0.displayName)" } ?? "on this Mac") \
+            instead, and will keep doing so until the key works.
             """
             alert.alertStyle = .warning
             alert.addButton(withTitle: "Change API Key...")
             alert.addButton(withTitle: "Later")
             NSApp.activate(ignoringOtherApps: true)
             if alert.runModal() == .alertFirstButtonReturn {
-                self.showDeepgramAPIKeyDialog()
+                self.showAPIKeyDialog(for: failure.service)
             } else {
                 // Gives the focus back to the app the next dictation goes to.
                 NSApp.hide(nil)
@@ -746,8 +784,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
-        if engine == .deepgram, whisperConfiguration?.deepgramAPIKey == nil {
-            showDeepgramAPIKeyDialog()
+        if let service = engine.cloudService, whisperConfiguration?.apiKeys[service] == nil {
+            showAPIKeyDialog(for: service, choosingIt: true)
             return
         }
 
@@ -755,28 +793,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         configureTranscriberFromSettings()
     }
 
-    /// Saving a key chooses Deepgram. Without a key, OpenWhisper transcribes on this Mac.
-    @objc private func showDeepgramAPIKeyDialog() {
+    @objc private func showAPIKeyDialog(_ sender: NSMenuItem) {
+        guard let service = CloudService(rawValue: sender.representedObject as? String ?? "") else { return }
+        showAPIKeyDialog(for: service)
+    }
+
+    /// Saving a key chooses its service when it was chosen from the Engine menu, or while transcribing on this
+    /// Mac. Otherwise it is a backup for the chosen service. Without any key, OpenWhisper transcribes on this Mac.
+    private func showAPIKeyDialog(for service: CloudService, choosingIt: Bool = false) {
+        let choosesService = choosingIt || whisperConfiguration?.transcriptionEngine.cloudService == nil
+
         Task {
-            let result = await DeepgramAPIKeyDialog.run()
+            let result = await APIKeyDialog.run(for: service)
             NSApp.hide(nil)
 
             switch result {
             case .saved(let key):
-                storedDeepgramAPIKey = key
-                UserDefaults.standard.set(
-                    TranscriptionEngine.deepgram.rawValue,
-                    forKey: OpenWhisperDefaultsKey.transcriptionEngine
-                )
-                deepgramProblemShown = false
+                storedAPIKeys[service] = key
+                if choosesService {
+                    UserDefaults.standard.set(service.engine.rawValue, forKey: OpenWhisperDefaultsKey.transcriptionEngine)
+                }
+                cloudProblemsShown.remove(service)
                 configureTranscriberFromSettings()
             case .removed:
-                storedDeepgramAPIKey = nil
+                storedAPIKeys[service] = nil
                 configureTranscriberFromSettings()
             case .cancelled:
                 break
             }
         }
+    }
+
+    @objc private func toggleKeepingRecordings() {
+        let keepsRecordings = !UserDefaults.standard.bool(forKey: OpenWhisperDefaultsKey.keepRecentRecordings)
+        UserDefaults.standard.set(keepsRecordings, forKey: OpenWhisperDefaultsKey.keepRecentRecordings)
+        updateSettingsMenuItems()
     }
 
     @objc private func selectLanguage(_ sender: NSMenuItem) {
