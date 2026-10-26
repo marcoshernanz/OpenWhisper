@@ -214,7 +214,7 @@ private final class WhisperWavFileWriter: @unchecked Sendable {
 
         FileManager.default.createFile(atPath: url.path, contents: nil)
         self.fileHandle = try FileHandle(forWritingTo: url)
-        try fileHandle.write(contentsOf: Self.header(dataByteCount: 0))
+        try fileHandle.write(contentsOf: WAVFile.header(dataByteCount: 0))
     }
 
     /// Called on the audio tap thread. Resampling happens on `writeQueue`, so the tap of an engine
@@ -247,7 +247,7 @@ private final class WhisperWavFileWriter: @unchecked Sendable {
 
             do {
                 try fileHandle.seek(toOffset: 0)
-                try fileHandle.write(contentsOf: Self.header(dataByteCount: dataByteCount))
+                try fileHandle.write(contentsOf: WAVFile.header(dataByteCount: dataByteCount))
                 try fileHandle.close()
                 isClosed = true
             } catch {
@@ -293,44 +293,6 @@ private final class WhisperWavFileWriter: @unchecked Sendable {
         }
 
         return samples
-    }
-
-    private static func header(dataByteCount: UInt32) -> Data {
-        let outputSampleRate = WhisperPCMResampler.outputSampleRate
-        var data = Data()
-        let riffByteCount = 36 + dataByteCount
-
-        data.appendASCII("RIFF")
-        data.appendLittleEndian(riffByteCount)
-        data.appendASCII("WAVE")
-        data.appendASCII("fmt ")
-        data.appendLittleEndian(UInt32(16))
-        data.appendLittleEndian(UInt16(1))
-        data.appendLittleEndian(UInt16(1))
-        data.appendLittleEndian(UInt32(outputSampleRate))
-        data.appendLittleEndian(UInt32(outputSampleRate * 2))
-        data.appendLittleEndian(UInt16(2))
-        data.appendLittleEndian(UInt16(16))
-        data.appendASCII("data")
-        data.appendLittleEndian(dataByteCount)
-
-        return data
-    }
-}
-
-private extension Data {
-    mutating func appendASCII(_ string: String) {
-        append(contentsOf: string.utf8)
-    }
-
-    mutating func appendLittleEndian(_ value: UInt16) {
-        var littleEndian = value.littleEndian
-        append(contentsOf: Swift.withUnsafeBytes(of: &littleEndian) { Array($0) })
-    }
-
-    mutating func appendLittleEndian(_ value: UInt32) {
-        var littleEndian = value.littleEndian
-        append(contentsOf: Swift.withUnsafeBytes(of: &littleEndian) { Array($0) })
     }
 }
 
