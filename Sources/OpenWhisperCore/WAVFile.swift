@@ -1,8 +1,35 @@
 import Foundation
 
 /// The 16 kHz mono 16-bit WAV files that AudioRecorder writes.
-enum WAVFile {
+public enum WAVFile {
     static let bytesPerSecond = Int(WhisperPCMResampler.outputSampleRate) * 2
+
+    public static func header(dataByteCount: UInt32) -> Data {
+        let outputSampleRate = WhisperPCMResampler.outputSampleRate
+        var data = Data()
+        let riffByteCount = 36 + dataByteCount
+
+        data.appendASCII("RIFF")
+        data.appendLittleEndian(riffByteCount)
+        data.appendASCII("WAVE")
+        data.appendASCII("fmt ")
+        data.appendLittleEndian(UInt32(16))
+        data.appendLittleEndian(UInt16(1))
+        data.appendLittleEndian(UInt16(1))
+        data.appendLittleEndian(UInt32(outputSampleRate))
+        data.appendLittleEndian(UInt32(outputSampleRate * 2))
+        data.appendLittleEndian(UInt16(2))
+        data.appendLittleEndian(UInt16(16))
+        data.appendASCII("data")
+        data.appendLittleEndian(dataByteCount)
+
+        return data
+    }
+
+    static func silence(_ seconds: TimeInterval) -> Data {
+        let samples = Data(count: Int(seconds * Double(bytesPerSecond)))
+        return header(dataByteCount: UInt32(samples.count)) + samples
+    }
 
     /// The same recording with `seconds` of silence before and after it, or nil when it is not a 16-bit PCM
     /// WAV file.
@@ -54,6 +81,20 @@ enum WAVFile {
 }
 
 private extension Data {
+    mutating func appendASCII(_ string: String) {
+        append(contentsOf: string.utf8)
+    }
+
+    mutating func appendLittleEndian(_ value: UInt16) {
+        var littleEndian = value.littleEndian
+        append(contentsOf: Swift.withUnsafeBytes(of: &littleEndian) { Array($0) })
+    }
+
+    mutating func appendLittleEndian(_ value: UInt32) {
+        var littleEndian = value.littleEndian
+        append(contentsOf: Swift.withUnsafeBytes(of: &littleEndian) { Array($0) })
+    }
+
     func littleEndianUInt16(at offset: Int) -> UInt16 {
         UInt16(self[offset]) | UInt16(self[offset + 1]) << 8
     }
