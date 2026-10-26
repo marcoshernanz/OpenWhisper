@@ -84,7 +84,7 @@ import Testing
             "OPENWHISPER_QUALITY": TranscriptionQualityProfile.accurate.rawValue,
             "OPENWHISPER_CLEANUP": TranscriptCleanupMode.light.rawValue
         ],
-        storedDeepgramAPIKey: nil
+        storedAPIKeys: [:]
     )
 
     #expect(configuration.modelURL.lastPathComponent == WhisperModelOption.distilLargeV3.fileName)
@@ -95,34 +95,59 @@ import Testing
     #expect(configuration.cleanupMode == .light)
 }
 
-@Test func usesDeepgramWheneverThereIsAKey() {
-    #expect(WhisperConfiguration.engine(chosen: nil, hasDeepgramAPIKey: true) == .deepgram)
-    #expect(WhisperConfiguration.engine(chosen: nil, hasDeepgramAPIKey: false) == .whisperKit)
-    #expect(WhisperConfiguration.engine(chosen: .deepgram, hasDeepgramAPIKey: false) == .whisperKit)
-    #expect(WhisperConfiguration.engine(chosen: .whisperKit, hasDeepgramAPIKey: true) == .whisperKit)
-    #expect(WhisperConfiguration.engine(chosen: .whisperCpp, hasDeepgramAPIKey: true) == .whisperCpp)
+@Test func usesTheMostAccurateServiceWithAKey() {
+    func engine(_ chosen: TranscriptionEngine?, _ servicesWithKeys: Set<CloudService>) -> TranscriptionEngine {
+        WhisperConfiguration.engine(chosen: chosen, servicesWithKeys: servicesWithKeys)
+    }
+
+    #expect(engine(nil, [.openAI, .deepgram]) == .openAI)
+    #expect(engine(nil, [.deepgram]) == .deepgram)
+    #expect(engine(nil, []) == .whisperKit)
+    #expect(engine(.deepgram, [.openAI, .deepgram]) == .deepgram)
+    #expect(engine(.deepgram, [.openAI]) == .openAI)
+    #expect(engine(.openAI, [.deepgram]) == .deepgram)
+    #expect(engine(.openAI, []) == .whisperKit)
+    #expect(engine(.whisperKit, [.openAI]) == .whisperKit)
+    #expect(engine(.whisperCpp, [.deepgram]) == .whisperCpp)
 }
 
-@Test func prefersTheDeepgramKeyFromTheEnvironment() {
-    func resolved(environment: [String: String], storedKey: String?) -> WhisperConfiguration {
+@Test func triesTheChosenServiceBeforeTheOthers() {
+    func cloudServices(_ engine: TranscriptionEngine, _ apiKeys: [CloudService: String]) -> [CloudService] {
+        WhisperConfiguration(
+            executableURL: URL(fileURLWithPath: "/tmp/whisper-cli"),
+            modelURL: URL(fileURLWithPath: "/tmp/model.bin"),
+            transcriptionEngine: engine,
+            apiKeys: apiKeys
+        ).cloudServices
+    }
+
+    #expect(cloudServices(.openAI, [.openAI: "a", .deepgram: "d"]) == [.openAI, .deepgram])
+    #expect(cloudServices(.deepgram, [.openAI: "a", .deepgram: "d"]) == [.deepgram, .openAI])
+    #expect(cloudServices(.openAI, [.openAI: "a"]) == [.openAI])
+    #expect(cloudServices(.whisperKit, [.openAI: "a", .deepgram: "d"]).isEmpty)
+}
+
+@Test func prefersAPIKeysFromTheEnvironment() {
+    func resolved(environment: [String: String], storedKeys: [CloudService: String]) -> WhisperConfiguration {
         WhisperConfiguration.resolved(
             bundleURL: URL(fileURLWithPath: "/Applications/OpenWhisper.app"),
             environment: environment,
-            storedDeepgramAPIKey: storedKey
+            storedAPIKeys: storedKeys
         )
     }
 
-    let stored = resolved(environment: [:], storedKey: "stored")
-    let overridden = resolved(environment: ["OPENWHISPER_DEEPGRAM_API_KEY": " environment "], storedKey: "stored")
-    let blank = resolved(environment: ["OPENWHISPER_DEEPGRAM_API_KEY": ""], storedKey: "  ")
-    let local = resolved(environment: ["OPENWHISPER_ENGINE": "whisperKit"], storedKey: "stored")
+    let stored = resolved(environment: [:], storedKeys: [.openAI: "openai", .deepgram: "deepgram"])
+    let overridden = resolved(environment: ["OPENWHISPER_DEEPGRAM_API_KEY": " environment "], storedKeys: [.deepgram: "stored"])
+    let openAIFromEnvironment = resolved(environment: ["OPENWHISPER_OPENAI_API_KEY": "environment"], storedKeys: [:])
+    let blank = resolved(environment: ["OPENWHISPER_DEEPGRAM_API_KEY": ""], storedKeys: [.deepgram: "  "])
+    let local = resolved(environment: ["OPENWHISPER_ENGINE": "whisperKit"], storedKeys: [.deepgram: "stored"])
 
-    #expect(stored.deepgramAPIKey == "stored")
-    #expect(overridden.deepgramAPIKey == "environment")
-    #expect(blank.deepgramAPIKey == nil)
-    #expect(blank.transcriptionEngine == .whisperKit)
+    #expect(stored.apiKeys == [.openAI: "openai", .deepgram: "deepgram"])
+    #expect(overridden.apiKeys == [.deepgram: "environment"])
+    #expect(openAIFromEnvironment.apiKeys == [.openAI: "environment"])
+    #expect(blank.apiKeys.isEmpty)
     #expect(local.transcriptionEngine == .whisperKit)
-    #expect(local.deepgramAPIKey == "stored")
+    #expect(local.apiKeys == [.deepgram: "stored"])
 }
 
 @Test func usesBuiltInMicrophoneOnlyWhileHeadphonesArePlaying() {
