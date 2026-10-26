@@ -8,4 +8,5 @@ public enum OpenWhisperDefaultsKey {
     public static let cleanupMode = "CleanupMode"
     public static let initialPrompt = "InitialPrompt"
     public static let useBuiltInMicrophoneDuringPlayback = "UseBuiltInMicrophoneDuringPlayback"
+    public static let keepRecentRecordings = "KeepRecentRecordings"
 }
