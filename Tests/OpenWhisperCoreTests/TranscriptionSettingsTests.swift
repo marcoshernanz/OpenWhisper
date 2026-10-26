@@ -46,6 +46,8 @@ import Testing
     #expect(cleaner.clean("  um hello   world  ", mode: .dictation) == "Hello world.")
     #expect(cleaner.clean("hello , world", mode: .light) == "hello, world")
     #expect(cleaner.clean("  hello   world  ", mode: .off) == "hello world")
+    #expect(cleaner.clean("o lo he entendido mal,", mode: .dictation) == "O lo he entendido mal.")
+    #expect(cleaner.clean("menos 1, 0, 1;", mode: .dictation) == "Menos 1, 0, 1.")
 }
 
 @Test func dictationCleanupKeepsURLsAndAbbreviationsIntact() {
@@ -81,7 +83,8 @@ import Testing
             "OPENWHISPER_MODEL_OPTION": WhisperModelOption.distilLargeV3.rawValue,
             "OPENWHISPER_QUALITY": TranscriptionQualityProfile.accurate.rawValue,
             "OPENWHISPER_CLEANUP": TranscriptCleanupMode.light.rawValue
-        ]
+        ],
+        storedDeepgramAPIKey: nil
     )
 
     #expect(configuration.modelURL.lastPathComponent == WhisperModelOption.distilLargeV3.fileName)
@@ -90,6 +93,36 @@ import Testing
     #expect(configuration.transcriptionEngine == .whisperKit)
     #expect(configuration.qualityProfile == .accurate)
     #expect(configuration.cleanupMode == .light)
+}
+
+@Test func usesDeepgramWheneverThereIsAKey() {
+    #expect(WhisperConfiguration.engine(chosen: nil, hasDeepgramAPIKey: true) == .deepgram)
+    #expect(WhisperConfiguration.engine(chosen: nil, hasDeepgramAPIKey: false) == .whisperKit)
+    #expect(WhisperConfiguration.engine(chosen: .deepgram, hasDeepgramAPIKey: false) == .whisperKit)
+    #expect(WhisperConfiguration.engine(chosen: .whisperKit, hasDeepgramAPIKey: true) == .whisperKit)
+    #expect(WhisperConfiguration.engine(chosen: .whisperCpp, hasDeepgramAPIKey: true) == .whisperCpp)
+}
+
+@Test func prefersTheDeepgramKeyFromTheEnvironment() {
+    func resolved(environment: [String: String], storedKey: String?) -> WhisperConfiguration {
+        WhisperConfiguration.resolved(
+            bundleURL: URL(fileURLWithPath: "/Applications/OpenWhisper.app"),
+            environment: environment,
+            storedDeepgramAPIKey: storedKey
+        )
+    }
+
+    let stored = resolved(environment: [:], storedKey: "stored")
+    let overridden = resolved(environment: ["OPENWHISPER_DEEPGRAM_API_KEY": " environment "], storedKey: "stored")
+    let blank = resolved(environment: ["OPENWHISPER_DEEPGRAM_API_KEY": ""], storedKey: "  ")
+    let local = resolved(environment: ["OPENWHISPER_ENGINE": "whisperKit"], storedKey: "stored")
+
+    #expect(stored.deepgramAPIKey == "stored")
+    #expect(overridden.deepgramAPIKey == "environment")
+    #expect(blank.deepgramAPIKey == nil)
+    #expect(blank.transcriptionEngine == .whisperKit)
+    #expect(local.transcriptionEngine == .whisperKit)
+    #expect(local.deepgramAPIKey == "stored")
 }
 
 @Test func usesBuiltInMicrophoneOnlyWhileHeadphonesArePlaying() {
