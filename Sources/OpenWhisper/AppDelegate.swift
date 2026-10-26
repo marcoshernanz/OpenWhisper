@@ -35,16 +35,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pasteLastTranscriptMenuItem: NSMenuItem?
     private let recentTranscriptsMenu = NSMenu()
     private var accessibilityPromptShown = false
+    private var deepgramProblemShown = false
+    /// Read once at launch and kept up to date by the key dialog, because reading the keychain can wait on it
+    /// being unlocked.
+    private var storedDeepgramAPIKey: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        configureTranscriberFromSettings(warmUp: false)
         configureStatusItem()
         migrateLastTranscript()
-        warmUpTranscriberIfPossible()
         requestMicrophoneAccess()
         startFnMonitor()
         startManualPasteHotKey()
         showSetupWindowIfNeeded()
+
+        // A dictation started before this finishes waits in the queue for the transcriber.
+        Task {
+            storedDeepgramAPIKey = await Task.detached { DeepgramAPIKeyStore.standard.read() }.value
+            configureTranscriberFromSettings(warmUp: false)
+            warmUpTranscriberIfPossible()
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -109,7 +118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func addSettingsMenus(to menu: NSMenu) {
         let engineMenuItem = NSMenuItem(title: "Engine", action: nil, keyEquivalent: "")
         let engineMenu = NSMenu()
-        engineMenuItems = LocalTranscriptionEngine.allCases.map { engine in
+        engineMenuItems = TranscriptionEngine.allCases.map { engine in
             let item = NSMenuItem(
                 title: engine.displayName,
                 action: #selector(selectTranscriptionEngine(_:)),
@@ -122,6 +131,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         menu.addItem(engineMenuItem)
         menu.setSubmenu(engineMenu, for: engineMenuItem)
+
+        let deepgramAPIKeyMenuItem = NSMenuItem(
+            title: "Deepgram API Key...",
+            action: #selector(showDeepgramAPIKeyDialog),
+            keyEquivalent: ""
+        )
+        deepgramAPIKeyMenuItem.target = self
+        menu.addItem(deepgramAPIKeyMenuItem)
 
         let languageMenuItem = NSMenuItem(title: "Language", action: nil, keyEquivalent: "")
         let languageMenu = NSMenu()
@@ -190,7 +207,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func configureTranscriberFromSettings(warmUp: Bool = true) {
         let previousTranscriber = transcriber
-        let configuration = WhisperConfiguration.resolved(bundleURL: Bundle.main.bundleURL)
+        let configuration = WhisperConfiguration.resolved(
+            bundleURL: Bundle.main.bundleURL,
+            storedDeepgramAPIKey: storedDeepgramAPIKey
+        )
         let nextTranscriber = WhisperTranscriber(configuration: configuration)
         transcriberReloadGeneration += 1
         let generation = transcriberReloadGeneration
@@ -231,7 +251,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard let whisperConfiguration else { return }
 
         for item in engineMenuItems {
-            let engine = LocalTranscriptionEngine(rawValue: item.representedObject as? String ?? "")
+            guard let engine = TranscriptionEngine(rawValue: item.representedObject as? String ?? "") else {
+                continue
+            }
+
+            let needsAPIKey = engine == .deepgram && whisperConfiguration.deepgramAPIKey == nil
+            item.title = needsAPIKey ? "\(engine.displayName) - Add API Key" : engine.displayName
             item.state = engine == whisperConfiguration.transcriptionEngine ? .on : .off
         }
 
@@ -328,6 +353,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
               let transcriber,
               whisperConfiguration.canWarmUpTranscriber
         else {
+            return
+        }
+
+        // Deepgram only opens a connection, which has nothing to wait for.
+        guard whisperConfiguration.transcriptionEngine != .deepgram else {
+            Task { await transcriber.warmUpServer() }
             return
         }
 
@@ -503,14 +534,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         Task {
             do {
-                let transcript = try await transcriber.transcribe(wavURL: recordingURL)
+                let outcome = try await transcriber.transcribe(wavURL: recordingURL)
                 try? FileManager.default.removeItem(at: recordingURL)
 
                 await MainActor.run {
                     self.isTranscribing = false
-                    if !transcript.isEmpty {
-                        self.rememberTranscript(transcript)
-                        TextInserter.insert(transcript)
+                    if !outcome.text.isEmpty {
+                        self.rememberTranscript(outcome.text)
+                        TextInserter.insert(outcome.text)
+                    }
+                    if let deepgramFailure = outcome.deepgramFailure, deepgramFailure.needsAttention {
+                        self.showDeepgramProblem(deepgramFailure)
                     }
                     self.processNextQueuedRecording()
                 }
@@ -525,6 +559,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     }
                     self.processNextQueuedRecording()
                 }
+            }
+        }
+    }
+
+    /// Shown once per launch, because every dictation until the key is fixed falls back the same way.
+    /// It waits until nothing is left to paste, which would otherwise land in the alert instead of the
+    /// focused app.
+    private func showDeepgramProblem(_ failure: DeepgramError) {
+        guard !deepgramProblemShown else { return }
+        deepgramProblemShown = true
+        showDeepgramProblemWhenIdle(failure)
+    }
+
+    private func showDeepgramProblemWhenIdle(_ failure: DeepgramError) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self else { return }
+            guard !self.isRecording, !self.isTranscribing, self.transcriptionQueue.isEmpty else {
+                self.showDeepgramProblemWhenIdle(failure)
+                return
+            }
+
+            let alert = NSAlert()
+            alert.messageText = "Deepgram Needs Attention"
+            alert.informativeText = """
+            \(failure.localizedDescription)
+
+            OpenWhisper transcribed this dictation on this Mac instead, and will keep doing so until the key works.
+            """
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "Change API Key...")
+            alert.addButton(withTitle: "Later")
+            NSApp.activate(ignoringOtherApps: true)
+            if alert.runModal() == .alertFirstButtonReturn {
+                self.showDeepgramAPIKeyDialog()
+            } else {
+                // Gives the focus back to the app the next dictation goes to.
+                NSApp.hide(nil)
             }
         }
     }
@@ -670,13 +741,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func selectTranscriptionEngine(_ sender: NSMenuItem) {
         guard let rawValue = sender.representedObject as? String,
-              LocalTranscriptionEngine(rawValue: rawValue) != nil
+              let engine = TranscriptionEngine(rawValue: rawValue)
         else {
+            return
+        }
+
+        if engine == .deepgram, whisperConfiguration?.deepgramAPIKey == nil {
+            showDeepgramAPIKeyDialog()
             return
         }
 
         UserDefaults.standard.set(rawValue, forKey: OpenWhisperDefaultsKey.transcriptionEngine)
         configureTranscriberFromSettings()
+    }
+
+    /// Saving a key chooses Deepgram. Without a key, OpenWhisper transcribes on this Mac.
+    @objc private func showDeepgramAPIKeyDialog() {
+        Task {
+            let result = await DeepgramAPIKeyDialog.run()
+            NSApp.hide(nil)
+
+            switch result {
+            case .saved(let key):
+                storedDeepgramAPIKey = key
+                UserDefaults.standard.set(
+                    TranscriptionEngine.deepgram.rawValue,
+                    forKey: OpenWhisperDefaultsKey.transcriptionEngine
+                )
+                deepgramProblemShown = false
+                configureTranscriberFromSettings()
+            case .removed:
+                storedDeepgramAPIKey = nil
+                configureTranscriberFromSettings()
+            case .cancelled:
+                break
+            }
+        }
     }
 
     @objc private func selectLanguage(_ sender: NSMenuItem) {
@@ -882,11 +982,11 @@ private enum AppStatus {
         case .idle:
             return "Hold fn to dictate, double-press fn to lock recording, or press ctrl+cmd+V to paste the last transcript."
         case .warmingUp:
-            return "Loading the local Whisper model."
+            return "Getting the transcription engine ready."
         case .recording:
             return "Recording. Release fn to transcribe, or press fn again after double-tap to stop."
         case .transcribing:
-            return "Transcribing locally."
+            return "Transcribing."
         case .needsAccessibility:
             return "Accessibility permission required."
         case .needsMicrophone:
@@ -901,6 +1001,6 @@ private enum AppStatus {
 
 private extension WhisperConfiguration {
     var canWarmUpTranscriber: Bool {
-        transcriptionEngine == .whisperKit || missingServerRequirementMessage == nil
+        transcriptionEngine != .whisperCpp || missingServerRequirementMessage == nil
     }
 }

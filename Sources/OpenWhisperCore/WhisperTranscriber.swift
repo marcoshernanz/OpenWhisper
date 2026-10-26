@@ -6,6 +6,7 @@ public struct WhisperTranscriber: Sendable {
     private let localCleaner: LocalTranscriptCleaner
     private let serverClient: WhisperServerClient
     private let whisperKitTranscriber: WhisperKitTranscriber
+    private let deepgramTranscriber: DeepgramTranscriber?
 
     public init(
         configuration: WhisperConfiguration,
@@ -22,10 +23,22 @@ public struct WhisperTranscriber: Sendable {
             serverProcess: serverProcess,
             cleaner: cleaner
         )
+        if configuration.transcriptionEngine == .deepgram, let apiKey = configuration.deepgramAPIKey {
+            self.deepgramTranscriber = DeepgramTranscriber(
+                apiKey: apiKey,
+                language: configuration.language,
+                vocabulary: configuration.initialPrompt
+            )
+        } else {
+            self.deepgramTranscriber = nil
+        }
     }
 
+    /// With Deepgram, the local model loads only once Deepgram fails, so it takes no memory until then.
     public func warmUpServer() async {
         switch configuration.transcriptionEngine {
+        case .deepgram:
+            await deepgramTranscriber?.warmUp()
         case .whisperKit:
             try? await whisperKitTranscriber.warmUp()
         case .whisperCpp:
@@ -37,8 +50,38 @@ public struct WhisperTranscriber: Sendable {
         await serverClient.stop()
     }
 
-    public func transcribe(wavURL: URL) async throws -> String {
-        if configuration.transcriptionEngine == .whisperKit {
+    /// A recording that Deepgram cannot transcribe, such as without a connection, is transcribed on this Mac.
+    public func transcribe(wavURL: URL) async throws -> TranscriptionOutcome {
+        guard let deepgramTranscriber else {
+            return TranscriptionOutcome(text: try await transcribeOnThisMac(wavURL: wavURL))
+        }
+
+        let deepgramFailure: DeepgramError
+        do {
+            let start = Date()
+            let transcript = try await deepgramTranscriber.transcribe(wavURL: wavURL)
+            NSLog("OpenWhisper transcribed \(Self.recordingDescription(wavURL)) with Deepgram in \(String(format: "%.2f", Date().timeIntervalSince(start))) s")
+            return TranscriptionOutcome(text: cleanup(transcript))
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            NSLog("OpenWhisper transcribing on this Mac after Deepgram failed: \(error.localizedDescription)")
+            deepgramFailure = error as? DeepgramError
+                ?? .unreachable(code: (error as? URLError)?.code ?? .unknown, message: error.localizedDescription)
+        }
+
+        do {
+            return TranscriptionOutcome(text: try await transcribeOnThisMac(wavURL: wavURL), deepgramFailure: deepgramFailure)
+        } catch {
+            throw TranscriptionError.deepgramAndThisMacFailed(
+                deepgram: deepgramFailure.localizedDescription,
+                thisMac: error.localizedDescription
+            )
+        }
+    }
+
+    private func transcribeOnThisMac(wavURL: URL) async throws -> String {
+        if configuration.transcriptionEngine != .whisperCpp {
             do {
                 return cleanup(try await whisperKitTranscriber.transcribe(wavURL: wavURL))
             } catch {
@@ -47,6 +90,11 @@ public struct WhisperTranscriber: Sendable {
         }
 
         return try await transcribeWithWhisperCpp(wavURL: wavURL)
+    }
+
+    private static func recordingDescription(_ wavURL: URL) -> String {
+        let bytes = (try? wavURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+        return String(format: "%.1f s", Double(bytes) / Double(WAVFile.bytesPerSecond))
     }
 
     private func transcribeWithWhisperCpp(wavURL: URL) async throws -> String {
@@ -89,9 +137,21 @@ public struct WhisperTranscriber: Sendable {
     }
 }
 
+public struct TranscriptionOutcome: Sendable, Equatable {
+    public let text: String
+    /// Why Deepgram was not used, when the recording was transcribed on this Mac instead.
+    public let deepgramFailure: DeepgramError?
+
+    public init(text: String, deepgramFailure: DeepgramError? = nil) {
+        self.text = text
+        self.deepgramFailure = deepgramFailure
+    }
+}
+
 public enum TranscriptionError: Error, LocalizedError, Equatable {
     case missingRequirement(String)
     case serverUnavailable(String)
+    case deepgramAndThisMacFailed(deepgram: String, thisMac: String)
 
     public var errorDescription: String? {
         switch self {
@@ -99,6 +159,8 @@ public enum TranscriptionError: Error, LocalizedError, Equatable {
             return message
         case .serverUnavailable(let message):
             return "whisper-server is unavailable: \(message)"
+        case .deepgramAndThisMacFailed(let deepgram, let thisMac):
+            return "\(deepgram)\n\nTranscribing on this Mac failed too: \(thisMac)"
         }
     }
 }

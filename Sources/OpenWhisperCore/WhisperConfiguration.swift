@@ -8,13 +8,14 @@ public struct WhisperConfiguration: Sendable, Equatable {
     public let serverHost: String
     public let serverPort: Int
     public let serverThreadCount: Int
-    public let transcriptionEngine: LocalTranscriptionEngine
+    public let transcriptionEngine: TranscriptionEngine
     public let qualityProfile: TranscriptionQualityProfile
     public let cleanupMode: TranscriptCleanupMode
     public let initialPrompt: String
     public let modelOption: WhisperModelOption?
     public let whisperKitModel: String
     public let whisperKitModelDirectory: URL
+    public let deepgramAPIKey: String?
 
     public init(
         executableURL: URL,
@@ -24,13 +25,14 @@ public struct WhisperConfiguration: Sendable, Equatable {
         serverHost: String = "127.0.0.1",
         serverPort: Int = 58442,
         serverThreadCount: Int = WhisperConfiguration.defaultServerThreadCount,
-        transcriptionEngine: LocalTranscriptionEngine = .whisperKit,
+        transcriptionEngine: TranscriptionEngine = .whisperKit,
         qualityProfile: TranscriptionQualityProfile = .balanced,
         cleanupMode: TranscriptCleanupMode = .dictation,
         initialPrompt: String = "",
         modelOption: WhisperModelOption? = nil,
         whisperKitModel: String = WhisperConfiguration.defaultWhisperKitModel,
-        whisperKitModelDirectory: URL = WhisperConfiguration.defaultWhisperKitModelDirectory
+        whisperKitModelDirectory: URL = WhisperConfiguration.defaultWhisperKitModelDirectory,
+        deepgramAPIKey: String? = nil
     ) {
         self.executableURL = executableURL
         self.serverExecutableURL = serverExecutableURL
@@ -47,21 +49,30 @@ public struct WhisperConfiguration: Sendable, Equatable {
         self.modelOption = modelOption ?? WhisperModelOption.option(forFileName: modelURL.lastPathComponent)
         self.whisperKitModel = whisperKitModel
         self.whisperKitModelDirectory = whisperKitModelDirectory
+        self.deepgramAPIKey = deepgramAPIKey
     }
 
+    /// `storedDeepgramAPIKey` is the key saved in the keychain, which `OPENWHISPER_DEEPGRAM_API_KEY` overrides.
     public static func resolved(
         bundleURL: URL,
         currentDirectoryURL: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        storedDeepgramAPIKey: String?
     ) -> WhisperConfiguration {
         let repoRoot = inferRepoRoot(bundleURL: bundleURL, currentDirectoryURL: currentDirectoryURL)
         let appSupportConfiguration = readAppSupportConfiguration()
         let defaults = UserDefaults.standard
-        let transcriptionEngine = LocalTranscriptionEngine(
-            rawValue: environment["OPENWHISPER_ENGINE"]
-                ?? defaults.string(forKey: OpenWhisperDefaultsKey.transcriptionEngine)
-                ?? ""
-        ) ?? .whisperKit
+        let deepgramAPIKey = [environment["OPENWHISPER_DEEPGRAM_API_KEY"], storedDeepgramAPIKey]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first { !$0.isEmpty }
+        let transcriptionEngine = engine(
+            chosen: TranscriptionEngine(
+                rawValue: environment["OPENWHISPER_ENGINE"]
+                    ?? defaults.string(forKey: OpenWhisperDefaultsKey.transcriptionEngine)
+                    ?? ""
+            ),
+            hasDeepgramAPIKey: deepgramAPIKey != nil
+        )
         let selectedModelOption = WhisperModelOption(
             rawValue: environment["OPENWHISPER_MODEL_OPTION"]
                 ?? defaults.string(forKey: OpenWhisperDefaultsKey.modelOption)
@@ -136,8 +147,20 @@ public struct WhisperConfiguration: Sendable, Equatable {
             initialPrompt: initialPrompt,
             modelOption: selectedModelOption,
             whisperKitModel: whisperKitModel,
-            whisperKitModelDirectory: whisperKitModelDirectory
+            whisperKitModelDirectory: whisperKitModelDirectory,
+            deepgramAPIKey: deepgramAPIKey
         )
+    }
+
+    /// Deepgram is the default whenever there is a key for it. Without one, transcription stays on the Mac,
+    /// even when Deepgram was chosen.
+    static func engine(chosen: TranscriptionEngine?, hasDeepgramAPIKey: Bool) -> TranscriptionEngine {
+        switch chosen {
+        case .deepgram, nil:
+            return hasDeepgramAPIKey ? .deepgram : .whisperKit
+        case let chosen?:
+            return chosen
+        }
     }
 
     public static let defaultWhisperKitModel = "openai_whisper-large-v3-v20240930_626MB"

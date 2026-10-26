@@ -80,6 +80,12 @@ public struct LocalTranscriptCleaner: Sendable {
         guard !text.isEmpty else { return text }
 
         var result = capitalizeFirstLetter(text)
+
+        // Deepgram can end on the comma before a pause that was the end of the dictation.
+        if result.hasSuffix(",") || result.hasSuffix(";") {
+            result.removeLast()
+        }
+
         if let last = result.unicodeScalars.last,
            CharacterSet.alphanumerics.contains(last) {
             result.append(".")
