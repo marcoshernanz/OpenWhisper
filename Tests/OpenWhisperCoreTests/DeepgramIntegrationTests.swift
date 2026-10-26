@@ -100,7 +100,7 @@ import Testing
 
         let outcome = try await Self.transcriber(apiKey: apiKey).transcribe(wavURL: recording)
 
-        #expect(outcome.deepgramFailure == nil)
+        #expect(outcome.service == .deepgram)
         Self.expect(outcome.text, contains: fixture.expectedPhrases)
     }
 
@@ -140,7 +140,7 @@ import Testing
         let outcome = try await Self.transcriber(apiKey: apiKey).transcribe(wavURL: recording)
         let seconds = Date().timeIntervalSince(start)
 
-        #expect(outcome.deepgramFailure == nil)
+        #expect(outcome.service == .deepgram)
         #expect(seconds < 30, "Took \(seconds) s")
         Self.expect(outcome.text, contains: Self.dictations.flatMap(\.expectedPhrases))
         #expect(outcome.text.lowercased().components(separatedBy: "orange giraffe").count == 3)
@@ -172,7 +172,7 @@ import Testing
 
         let outcome = try await Self.transcriber(apiKey: String(repeating: "0", count: 40)).transcribe(wavURL: recording)
 
-        #expect(outcome.deepgramFailure == .rejectedKey("Invalid credentials."))
+        #expect(outcome.cloudFailures == [CloudTranscriptionError(.deepgram, .rejectedKey("Invalid credentials."))])
         Self.expect(outcome.text, contains: ["data loader", "orange giraffe"])
     }
 
@@ -180,7 +180,7 @@ import Testing
         guard let apiKey = Self.apiKey() else { return }
 
         try await DeepgramTranscriber(apiKey: apiKey, language: "auto", vocabulary: "").validateKey()
-        await #expect(throws: DeepgramError.rejectedKey("Invalid credentials.")) {
+        await #expect(throws: CloudTranscriptionError(.deepgram, .rejectedKey("Invalid credentials."))) {
             try await DeepgramTranscriber(apiKey: String(repeating: "0", count: 40), language: "auto", vocabulary: "")
                 .validateKey()
         }
@@ -190,7 +190,7 @@ import Testing
         let environment = ProcessInfo.processInfo.environment
         guard environment["OPENWHISPER_RUN_DEEPGRAM_INTEGRATION"] == "1" else { return nil }
 
-        return environment["OPENWHISPER_DEEPGRAM_API_KEY"] ?? DeepgramAPIKeyStore.standard.read()
+        return environment["OPENWHISPER_DEEPGRAM_API_KEY"] ?? CloudService.deepgram.keyStore.read()
     }
 
     private static func transcriber(apiKey: String) -> WhisperTranscriber {
@@ -199,11 +199,11 @@ import Testing
             modelURL: URL(fileURLWithPath: "/tmp/whisper-model.bin"),
             transcriptionEngine: .deepgram,
             initialPrompt: vocabulary,
-            deepgramAPIKey: apiKey
+            apiKeys: [.deepgram: apiKey]
         ))
     }
 
-    private static func expect(_ transcript: String, contains phrases: [String]) {
+    static func expect(_ transcript: String, contains phrases: [String]) {
         for phrase in phrases {
             #expect(transcript.lowercased().contains(phrase), "Missing \"\(phrase)\" in: \(transcript)")
         }
@@ -211,7 +211,7 @@ import Testing
 
     /// One recording of the fixtures spoken one after another, written like AudioRecorder writes it.
     /// `trimmingEnds` takes away the silence `say` leaves before and after the speech.
-    private static func concatenate(
+    static func concatenate(
         _ fixtures: [SpokenFixture],
         pause: TimeInterval,
         trimmingEnds: Bool = false

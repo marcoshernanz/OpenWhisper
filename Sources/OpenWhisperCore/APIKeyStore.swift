@@ -1,20 +1,23 @@
 import Foundation
 
-/// Keeps the Deepgram API key in the login keychain, where this saves it:
+/// Keeps a service's API key in the login keychain, where this saves the OpenAI one:
 ///
-///     security add-generic-password -s dev.openwhisper.deepgram -a api-key -w
+///     security add-generic-password -s dev.openwhisper.openai -a api-key -w "$(pbpaste)"
+///
+/// Pasting the key into the prompt that `-w` alone shows would cut it at 128 characters, which is shorter
+/// than an OpenAI key.
 ///
 /// It goes through the `security` tool rather than the Security framework. OpenWhisper is signed ad hoc, so
 /// the keychain sees every build as a different app, and reading a key through the framework would ask for
 /// the login password after every update. Items that `security` creates trust `security` itself.
-public struct DeepgramAPIKeyStore: Sendable {
-    public static let standard = DeepgramAPIKeyStore(service: "dev.openwhisper.deepgram")
-
+public struct APIKeyStore: Sendable {
     private let service: String
+    private let label: String
     private let account = "api-key"
 
-    public init(service: String) {
+    public init(service: String, label: String) {
         self.service = service
+        self.label = label
     }
 
     /// Blocks until the keychain answers, which takes a few milliseconds, without running the run loop.
@@ -33,15 +36,15 @@ public struct DeepgramAPIKeyStore: Sendable {
     /// read while it runs.
     public func save(_ key: String) throws {
         guard Self.isValidKey(key) else {
-            throw DeepgramAPIKeyStoreError.invalidKey
+            throw APIKeyStoreError.invalidKey
         }
 
-        let command = "add-generic-password -U -s \"\(service)\" -a \"\(account)\" -l \"OpenWhisper Deepgram API key\" -w \"\(key)\"\n"
+        let command = "add-generic-password -U -s \"\(service)\" -a \"\(account)\" -l \"\(label)\" -w \"\(key)\"\n"
         let result = try Self.runSecurity(["-i"], input: command)
 
         // `security -i` exits successfully even when a command in it fails.
         guard read() == key else {
-            throw DeepgramAPIKeyStoreError.couldNotSave(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+            throw APIKeyStoreError.couldNotSave(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
 
@@ -50,12 +53,13 @@ public struct DeepgramAPIKeyStore: Sendable {
 
         // 44 means there was no key to delete.
         guard result.exitCode == 0 || result.exitCode == 44 else {
-            throw DeepgramAPIKeyStoreError.couldNotDelete(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
+            throw APIKeyStoreError.couldNotDelete(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))
         }
     }
 
-    /// Deepgram keys are 40 hexadecimal characters. Other tokens are accepted as long as they cannot break
-    /// out of the quotes in the `security` command.
+    /// Deepgram keys are 40 hexadecimal characters, and OpenAI keys about 160 letters, digits, dashes and
+    /// underscores. Other tokens are accepted as long as they cannot break out of the quotes in the
+    /// `security` command.
     public static func isValidKey(_ key: String) -> Bool {
         !key.isEmpty
             && key.count <= 512
@@ -99,7 +103,7 @@ public struct DeepgramAPIKeyStore: Sendable {
     }
 }
 
-public enum DeepgramAPIKeyStoreError: Error, LocalizedError, Equatable {
+public enum APIKeyStoreError: Error, LocalizedError, Equatable {
     case invalidKey
     case couldNotSave(String)
     case couldNotDelete(String)
@@ -107,7 +111,7 @@ public enum DeepgramAPIKeyStoreError: Error, LocalizedError, Equatable {
     public var errorDescription: String? {
         switch self {
         case .invalidKey:
-            return "That doesn't look like a Deepgram API key. Keys are made of letters and numbers."
+            return "That doesn't look like an API key. Keys are made of letters and numbers."
         case .couldNotSave(let detail):
             return detail.isEmpty ? "The key could not be saved in the keychain." : "The key could not be saved in the keychain: \(detail)"
         case .couldNotDelete(let detail):
