@@ -15,7 +15,7 @@ public struct WhisperConfiguration: Sendable, Equatable {
     public let modelOption: WhisperModelOption?
     public let whisperKitModel: String
     public let whisperKitModelDirectory: URL
-    public let deepgramAPIKey: String?
+    public let apiKeys: [CloudService: String]
 
     public init(
         executableURL: URL,
@@ -32,7 +32,7 @@ public struct WhisperConfiguration: Sendable, Equatable {
         modelOption: WhisperModelOption? = nil,
         whisperKitModel: String = WhisperConfiguration.defaultWhisperKitModel,
         whisperKitModelDirectory: URL = WhisperConfiguration.defaultWhisperKitModelDirectory,
-        deepgramAPIKey: String? = nil
+        apiKeys: [CloudService: String] = [:]
     ) {
         self.executableURL = executableURL
         self.serverExecutableURL = serverExecutableURL
@@ -49,29 +49,33 @@ public struct WhisperConfiguration: Sendable, Equatable {
         self.modelOption = modelOption ?? WhisperModelOption.option(forFileName: modelURL.lastPathComponent)
         self.whisperKitModel = whisperKitModel
         self.whisperKitModelDirectory = whisperKitModelDirectory
-        self.deepgramAPIKey = deepgramAPIKey
+        self.apiKeys = apiKeys
     }
 
-    /// `storedDeepgramAPIKey` is the key saved in the keychain, which `OPENWHISPER_DEEPGRAM_API_KEY` overrides.
+    /// `storedAPIKeys` are the keys saved in the keychain, which `OPENWHISPER_OPENAI_API_KEY` and
+    /// `OPENWHISPER_DEEPGRAM_API_KEY` override.
     public static func resolved(
         bundleURL: URL,
         currentDirectoryURL: URL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath),
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        storedDeepgramAPIKey: String?
+        storedAPIKeys: [CloudService: String]
     ) -> WhisperConfiguration {
         let repoRoot = inferRepoRoot(bundleURL: bundleURL, currentDirectoryURL: currentDirectoryURL)
         let appSupportConfiguration = readAppSupportConfiguration()
         let defaults = UserDefaults.standard
-        let deepgramAPIKey = [environment["OPENWHISPER_DEEPGRAM_API_KEY"], storedDeepgramAPIKey]
-            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .first { !$0.isEmpty }
+        var apiKeys: [CloudService: String] = [:]
+        for service in CloudService.allCases {
+            apiKeys[service] = [environment[service.apiKeyEnvironmentVariable], storedAPIKeys[service]]
+                .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .first { !$0.isEmpty }
+        }
         let transcriptionEngine = engine(
             chosen: TranscriptionEngine(
                 rawValue: environment["OPENWHISPER_ENGINE"]
                     ?? defaults.string(forKey: OpenWhisperDefaultsKey.transcriptionEngine)
                     ?? ""
             ),
-            hasDeepgramAPIKey: deepgramAPIKey != nil
+            servicesWithKeys: Set(apiKeys.keys)
         )
         let selectedModelOption = WhisperModelOption(
             rawValue: environment["OPENWHISPER_MODEL_OPTION"]
@@ -148,19 +152,26 @@ public struct WhisperConfiguration: Sendable, Equatable {
             modelOption: selectedModelOption,
             whisperKitModel: whisperKitModel,
             whisperKitModelDirectory: whisperKitModelDirectory,
-            deepgramAPIKey: deepgramAPIKey
+            apiKeys: apiKeys
         )
     }
 
-    /// Deepgram is the default whenever there is a key for it. Without one, transcription stays on the Mac,
-    /// even when Deepgram was chosen.
-    static func engine(chosen: TranscriptionEngine?, hasDeepgramAPIKey: Bool) -> TranscriptionEngine {
-        switch chosen {
-        case .deepgram, nil:
-            return hasDeepgramAPIKey ? .deepgram : .whisperKit
-        case let chosen?:
+    /// The most accurate service with a key is the default, and stands in for a service chosen without one.
+    /// Without any key, transcription stays on the Mac.
+    static func engine(chosen: TranscriptionEngine?, servicesWithKeys: Set<CloudService>) -> TranscriptionEngine {
+        if let chosen, chosen.cloudService.map(servicesWithKeys.contains) ?? true {
             return chosen
         }
+
+        return CloudService.allCases.first(where: servicesWithKeys.contains)?.engine ?? .whisperKit
+    }
+
+    /// The services to try in turn before transcribing on this Mac: the chosen one, then the others with a key.
+    public var cloudServices: [CloudService] {
+        guard let chosen = transcriptionEngine.cloudService else { return [] }
+
+        return ([chosen] + CloudService.allCases.filter { $0 != chosen })
+            .filter { apiKeys[$0] != nil }
     }
 
     public static let defaultWhisperKitModel = "openai_whisper-large-v3-v20240930_626MB"
