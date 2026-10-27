@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pasteLastTranscriptMenuItem: NSMenuItem?
     private let recentTranscriptsMenu = NSMenu()
     private var accessibilityPromptShown = false
+    private var microphoneRequestPending = false
     private var cloudProblemsShown: Set<CloudService> = []
     /// Read once at launch and kept up to date by the key dialog, because reading the keychain can wait on it
     /// being unlocked.
@@ -356,12 +357,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .authorized:
             break
         case .notDetermined:
+            guard !microphoneRequestPending else { return }
+            microphoneRequestPending = true
             AVCaptureDevice.requestAccess(for: .audio) { [weak self] granted in
                 Task { @MainActor in
+                    self?.microphoneRequestPending = false
                     if !granted {
                         self?.setStatus(.needsMicrophone)
                         self?.showSetupWindow()
                     } else {
+                        self?.refreshActivityStatus()
                         self?.updateSetupWindow()
                     }
                 }
@@ -462,8 +467,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func startDictation() -> Bool {
         guard !isRecording else { return false }
 
-        guard AXIsProcessTrusted() else {
-            setStatus(.needsAccessibility)
+        // Checked before the overlay shows, so it does not flash up for a recording that cannot start.
+        guard !permissionsNeedSetup else {
+            setStatus(currentReadyStatus)
             showSetupWindow()
             return false
         }
@@ -484,14 +490,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } catch {
             dictationOverlay.hide()
             setStatus(.error)
-            if permissionsNeedSetup {
-                showSetupWindow()
-            } else {
-                showOneTimeAlert(
-                    title: "Could Not Start Recording",
-                    message: error.localizedDescription
-                )
-            }
+            showOneTimeAlert(
+                title: "Could Not Start Recording",
+                message: error.localizedDescription
+            )
             return false
         }
     }
@@ -737,25 +739,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 relaunchApp: {
                     AppRelauncher.relaunch()
                 },
-                readState: {
-                    PermissionSetupState(
-                        microphoneStatus: AVCaptureDevice.authorizationStatus(for: .audio),
-                        accessibilityTrusted: AXIsProcessTrusted()
-                    )
+                readState: { [unowned self] in
+                    permissionSetupState
                 }
             )
         }
 
         updateSetupWindow()
+        // OpenWhisper has no Dock icon, so without this the window opens behind the app in front.
+        NSApp.activate(ignoringOtherApps: true)
         setupWindowController?.showWindow(nil)
     }
 
     private func updateSetupWindow() {
-        setupWindowController?.update(
-            state: PermissionSetupState(
-                microphoneStatus: AVCaptureDevice.authorizationStatus(for: .audio),
-                accessibilityTrusted: AXIsProcessTrusted()
-            )
+        setupWindowController?.update(state: permissionSetupState)
+    }
+
+    private var permissionSetupState: PermissionSetupState {
+        PermissionSetupState(
+            microphoneStatus: AVCaptureDevice.authorizationStatus(for: .audio),
+            microphoneRequestPending: microphoneRequestPending,
+            accessibilityTrusted: AXIsProcessTrusted()
         )
     }
 
