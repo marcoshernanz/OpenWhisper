@@ -3,6 +3,8 @@ import AVFoundation
 
 struct PermissionSetupState {
     let microphoneStatus: AVAuthorizationStatus
+    /// macOS has been asked and not answered yet.
+    let microphoneRequestPending: Bool
     let accessibilityTrusted: Bool
 }
 
@@ -57,6 +59,11 @@ final class PermissionSetupWindowController: NSWindowController {
             microphoneStatusLabel.stringValue = "Allowed"
             microphoneButton.title = "Allowed"
             microphoneButton.isEnabled = false
+        case .notDetermined where state.microphoneRequestPending:
+            // macOS sometimes never shows its prompt, and asking again only queues another one behind it.
+            microphoneStatusLabel.stringValue = "Requested"
+            microphoneButton.title = "Open Microphone Settings"
+            microphoneButton.isEnabled = true
         case .notDetermined:
             microphoneStatusLabel.stringValue = "Not requested"
             microphoneButton.title = "Allow Microphone"
@@ -188,10 +195,10 @@ final class PermissionSetupWindowController: NSWindowController {
     }
 
     @objc private func handleMicrophoneButton() {
-        switch readState().microphoneStatus {
-        case .notDetermined:
+        let state = readState()
+        if state.microphoneStatus == .notDetermined, !state.microphoneRequestPending {
             requestMicrophonePermission()
-        default:
+        } else {
             openMicrophoneSettings()
         }
         update(state: readState())
