@@ -3,7 +3,6 @@ import AppKit
 @MainActor
 final class DictationOverlayWindowController: NSWindowController {
     private let overlayView = DictationOverlayView()
-    private var targetFrame: NSRect = .zero
     private var hideWorkItem: DispatchWorkItem?
 
     init() {
@@ -30,33 +29,30 @@ final class DictationOverlayWindowController: NSWindowController {
         nil
     }
 
+    /// The window itself goes straight to its place at full opacity, and only its content animates. Animating
+    /// the window stopped for good once the display it was tied to went away, such as when the lid closed, and
+    /// left the overlay faint and low until OpenWhisper restarted.
     func show() {
         guard let window else { return }
 
         hideWorkItem?.cancel()
-        targetFrame = frameForCurrentScreen()
-        let startFrame = targetFrame.offsetBy(dx: 0, dy: -10)
 
         overlayView.updateLevel(0)
         overlayView.startAnimating()
-        window.setFrame(startFrame, display: true)
-        window.alphaValue = 0.35
+        window.alphaValue = 1
+        window.setFrame(frameForCurrentScreen(), display: true)
         window.orderFrontRegardless()
-        window.display()
+        overlayView.slide(opacity: 1, fromOffset: -10, toOffset: 0, duration: 0.18, timing: .easeOut)
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.18
-            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            window.animator().alphaValue = 1
-            window.animator().setFrame(targetFrame, display: true)
-        }
+        // The microphone starts right after this and holds up the main thread. Committing now lets Core
+        // Animation run the animation meanwhile, instead of the overlay waiting for the microphone.
+        CATransaction.flush()
     }
 
     func hide() {
         guard let window, window.isVisible else { return }
 
         hideWorkItem?.cancel()
-        let endFrame = targetFrame.offsetBy(dx: 0, dy: -8)
         let workItem = DispatchWorkItem { [weak self, weak window] in
             window?.orderOut(nil)
             self?.overlayView.stopAnimating()
@@ -64,13 +60,7 @@ final class DictationOverlayWindowController: NSWindowController {
         }
         hideWorkItem = workItem
 
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.14
-            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            window.animator().alphaValue = 0
-            window.animator().setFrame(endFrame, display: true)
-        }
-
+        overlayView.slide(opacity: 0, fromOffset: 0, toOffset: -8, duration: 0.14, timing: .easeIn)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.16, execute: workItem)
     }
 
@@ -143,6 +133,44 @@ private final class DictationOverlayView: NSView {
 
     func updateLevel(_ level: CGFloat) {
         waveformView.updateLevel(level)
+    }
+
+    /// Fades to `opacity` while moving from one vertical offset to the other, and stays at the last offset.
+    /// The opacity is set first, so the overlay ends up right even if the animation never runs.
+    func slide(
+        opacity: CGFloat,
+        fromOffset: CGFloat,
+        toOffset: CGFloat,
+        duration: CFTimeInterval,
+        timing: CAMediaTimingFunctionName
+    ) {
+        guard let layer else { return }
+
+        // A show that interrupts a hide fades in from where the hide got to, rather than from faint.
+        let currentOpacity = layer.presentation()?.opacity
+        let startOpacity = opacity > 0 ? max(0.35, currentOpacity ?? 0) : currentOpacity ?? 1
+
+        let fade = CABasicAnimation(keyPath: "opacity")
+        fade.fromValue = startOpacity
+        fade.toValue = opacity
+
+        let move = CABasicAnimation(keyPath: "transform.translation.y")
+        move.fromValue = fromOffset
+        move.toValue = toOffset
+        move.isAdditive = true
+
+        let animation = CAAnimationGroup()
+        animation.animations = [fade, move]
+        animation.duration = duration
+        animation.timingFunction = CAMediaTimingFunction(name: timing)
+        animation.fillMode = .forwards
+        animation.isRemovedOnCompletion = false
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        alphaValue = opacity
+        layer.add(animation, forKey: "slide")
+        CATransaction.commit()
     }
 }
 
