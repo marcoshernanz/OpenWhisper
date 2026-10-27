@@ -22,6 +22,8 @@ This installs and opens `/Applications/OpenWhisper.app`. On first launch, OpenWh
 
 macOS does not allow apps to grant Accessibility permission automatically. Use OpenWhisper's setup window to open the right System Settings pane, enable `OpenWhisper`, then relaunch OpenWhisper from the setup window.
 
+macOS ties both permissions to the app's signature. Without an Apple Development certificate, `scripts/sign-app.sh` signs with a self-signed "OpenWhisper Local Signing" certificate, so the permissions carry over to the next build. It creates the certificate on first use in its own keychain, `~/Library/Keychains/openwhisper-signing.keychain-db`, and keeps that keychain's password in the login keychain. Set `OPENWHISPER_CODESIGN_IDENTITY` to sign with another identity.
+
 Then focus any text field, hold `fn`, speak, and release `fn`. You can also double-press `fn` to keep recording hands-free, then press `fn` once more to stop. No dictation text is inserted while recording is active.
 
 OpenWhisper downloads Argmax's Core ML WhisperKit model on first use and warms it in the background. The first launch can take a few minutes while the model downloads and Core ML specializes it for your Mac; after that, releasing `fn` should insert text much faster because OpenWhisper keeps the local model path warm.
