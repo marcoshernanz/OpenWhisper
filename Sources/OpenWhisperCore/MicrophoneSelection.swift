@@ -3,7 +3,6 @@ import Foundation
 public struct AudioInputDeviceInfo: Equatable, Sendable {
     public enum Transport: Equatable, Sendable {
         case builtIn
-        case bluetooth
         case other
     }
 
@@ -19,19 +18,15 @@ public struct AudioInputDeviceInfo: Equatable, Sendable {
 public enum MicrophoneSelection {
     /// Returns the device to record from, or nil to follow the macOS default input.
     ///
-    /// Recording from Bluetooth headphones such as AirPods switches them to their headset profile,
-    /// which cuts playback for about a second when recording starts and stops, and lowers its quality
-    /// in between. That only matters while something is playing through them, so only then does the
-    /// built-in microphone take over. With the lid closed, it cannot hear anything.
+    /// The built-in microphone hears speech about a tenth of a second after recording starts. Bluetooth
+    /// headphones such as AirPods first switch to their headset profile, which takes from a third of a second
+    /// to two seconds and loses the first words, and cuts and degrades whatever plays through them. With the
+    /// lid closed, the built-in microphone cannot hear anything, so the default input takes over.
     public static func preferredInputDeviceID(
-        defaultInput: AudioInputDeviceInfo?,
         availableInputs: [AudioInputDeviceInfo],
-        isHeadphoneAudioPlaying: Bool,
         isLidClosed: Bool
     ) -> UInt32? {
-        guard defaultInput?.transport == .bluetooth, isHeadphoneAudioPlaying, !isLidClosed else {
-            return nil
-        }
+        guard !isLidClosed else { return nil }
 
         return availableInputs.first { $0.transport == .builtIn }?.id
     }
