@@ -6,42 +6,14 @@ import OpenWhisperCore
 enum SystemAudioInputs {
     /// The input device OpenWhisper should record from, or nil for the macOS default input.
     static func preferredInputDeviceID() -> AudioDeviceID? {
-        let usesBuiltInMicrophoneDuringPlayback = UserDefaults.standard
-            .object(forKey: OpenWhisperDefaultsKey.useBuiltInMicrophoneDuringPlayback) as? Bool ?? true
-        guard usesBuiltInMicrophoneDuringPlayback else { return nil }
+        let usesBuiltInMicrophone = UserDefaults.standard
+            .object(forKey: OpenWhisperDefaultsKey.useBuiltInMicrophone) as? Bool ?? true
+        guard usesBuiltInMicrophone else { return nil }
 
         return MicrophoneSelection.preferredInputDeviceID(
-            defaultInput: defaultInputDevice(),
             availableInputs: inputDevices(),
-            isHeadphoneAudioPlaying: isBluetoothOutputPlaying(),
             isLidClosed: isLidClosed()
         )
-    }
-
-    /// Whether any app is playing through Bluetooth headphones that are the default output.
-    /// OpenWhisper's own engine is stopped whenever this is checked, so it never counts itself.
-    private static func isBluetoothOutputPlaying() -> Bool {
-        let deviceID: AudioDeviceID = property(
-            kAudioHardwarePropertyDefaultOutputDevice,
-            of: AudioObjectID(kAudioObjectSystemObject),
-            default: kAudioObjectUnknown
-        )
-        guard deviceID != kAudioObjectUnknown, deviceInfo(deviceID).transport == .bluetooth else {
-            return false
-        }
-
-        return property(kAudioDevicePropertyDeviceIsRunningSomewhere, of: deviceID, default: UInt32(0)) != 0
-    }
-
-    private static func defaultInputDevice() -> AudioInputDeviceInfo? {
-        let deviceID: AudioDeviceID = property(
-            kAudioHardwarePropertyDefaultInputDevice,
-            of: AudioObjectID(kAudioObjectSystemObject),
-            default: kAudioObjectUnknown
-        )
-        guard deviceID != kAudioObjectUnknown else { return nil }
-
-        return deviceInfo(deviceID)
     }
 
     private static func inputDevices() -> [AudioInputDeviceInfo] {
@@ -69,14 +41,7 @@ enum SystemAudioInputs {
     private static func deviceInfo(_ deviceID: AudioDeviceID) -> AudioInputDeviceInfo {
         let transport: UInt32 = property(kAudioDevicePropertyTransportType, of: deviceID, default: 0)
 
-        switch transport {
-        case kAudioDeviceTransportTypeBuiltIn:
-            return AudioInputDeviceInfo(id: deviceID, transport: .builtIn)
-        case kAudioDeviceTransportTypeBluetooth, kAudioDeviceTransportTypeBluetoothLE:
-            return AudioInputDeviceInfo(id: deviceID, transport: .bluetooth)
-        default:
-            return AudioInputDeviceInfo(id: deviceID, transport: .other)
-        }
+        return AudioInputDeviceInfo(id: deviceID, transport: transport == kAudioDeviceTransportTypeBuiltIn ? .builtIn : .other)
     }
 
     private static func hasInputStreams(_ deviceID: AudioDeviceID) -> Bool {
