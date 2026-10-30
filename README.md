@@ -154,12 +154,14 @@ The `fn`/Globe key is exposed by macOS as a function modifier flag. If macOS bui
 
 ## Audio Input Notes
 
-OpenWhisper records from the macOS default input device. When that changes, for example when AirPods connect and become the default microphone, OpenWhisper rebuilds its audio engine for the new device, including in the middle of a dictation.
+OpenWhisper records from the Mac's built-in microphone, which hears you about a tenth of a second after `fn` goes down. Bluetooth headphones such as AirPods first switch to their headset profile, which takes from a third of a second to two seconds and loses your first words, and cuts and degrades whatever plays through them. Recording from the built-in microphone avoids both, so headphones keep playing at full quality.
 
-When the default input is Bluetooth headphones such as AirPods, OpenWhisper uses their microphone unless something is playing through them. Recording from them switches them to their headset profile, which cuts playback for about a second when recording starts and stops and lowers its quality in between, so while audio is playing OpenWhisper records from the Mac's built-in microphone instead. With the lid closed, the built-in microphone cannot hear anything, so OpenWhisper uses the headphones. OpenWhisper releases the microphone after every dictation, so the headphones return to full quality right away. The first half second of a dictation through the headphones is silent while they switch profiles. To always use the default input:
+With the lid closed, the built-in microphone cannot hear anything, so OpenWhisper records from the macOS default input. When that changes, for example when AirPods connect and become the default microphone, OpenWhisper rebuilds its audio engine for the new device, including in the middle of a dictation. Through headphones, the start of a dictation is silent while they switch profiles, and OpenWhisper releases the microphone after every dictation, so they return to full quality right away.
+
+To always record from the default input:
 
 ```sh
-defaults write dev.openwhisper.OpenWhisper UseBuiltInMicrophoneDuringPlayback -bool false
+defaults write dev.openwhisper.OpenWhisper UseBuiltInMicrophone -bool false
 ```
 
 ## Build an App Bundle
